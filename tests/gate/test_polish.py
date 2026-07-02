@@ -1,4 +1,5 @@
-"""Gate: phase 6 — BM25 label search, map projection, scale-stunt attach."""
+"""Gate: phase 6 — label search (model-free BM25 fallback path; the neural
+miniCOIL+dense legs are covered in tests/smoke), map projection, scale stunt."""
 
 import uuid
 

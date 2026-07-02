@@ -89,6 +89,32 @@ def test_same_id_mutable_beats_higher_scoring_mirror_copy(hf):
     assert hit.from_mutable and hit.label == "badge"
 
 
+def test_markpushed_skips_points_edited_mid_push(hf):
+    """Codex finding: the push handshake snapshots content; if the user edits
+    the object while the network push is in flight, MarkPushed must NOT stamp
+    t_sync on the newer content (it would be deduped away on the next pull)."""
+    import queue
+
+    from fleetmemory.memory.core import MarkPushed, PreparePush, Rename
+
+    hf.ingest(1, hf.geo.view("badge"))
+    hf.send(Teach(tid=1, epoch=1, label="badge"))
+    oid = hf.track_state(1).object_id
+
+    reply = queue.Queue()
+    hf.send(PreparePush(object_ids=[oid], reply=reply))
+    prepared = reply.get_nowait()  # what the sync worker would upload
+    hf.send(Rename(object_id=oid, label="my badge"))  # edit lands mid-flight
+    hf.send(
+        MarkPushed(
+            items=[{"old_id": oid, "t_sync": 111.0, "fingerprint": prepared[0]["fingerprint"]}]
+        )
+    )
+    payload, _ = hf.store.get_object(oid)
+    assert "t_sync" not in payload  # still dirty: the edit will be re-pushed
+    assert payload["label"] == "my badge"
+
+
 def test_stamped_but_not_yet_mirrored_survives(hf):
     """t_sync alone must not kill a point: if the push landed but the pull hasn't
     delivered it yet, deleting would lose the object entirely."""
