@@ -72,7 +72,7 @@ Requirements: macOS on Apple Silicon, Python 3.12,
 [uv](https://docs.astral.sh/uv/), and a webcam.
 
 ```bash
-git clone <repo-url> && cd fleet-memory
+git clone https://github.com/qdrant-labs/memory-fleet.git && cd memory-fleet
 make setup          # install dependencies
 make run            # http://127.0.0.1:8765 (first run downloads ~500 MB of model weights)
 ```

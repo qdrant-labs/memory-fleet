@@ -111,6 +111,10 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.settings, app.state.store, app.state.core = settings, store, core
     app.state.pipeline, app.state.hub, app.state.sync = pipeline, hub, sync
 
+    # tuning dials persist next to the shards so a restart keeps them
+    app.state.tuning_path = Path(settings.data_dir) / "tuning.json"
+    app.state.tuning = _load_tuning(app.state.tuning_path, core, pipeline)
+
     @app.get("/")
     async def index():
         return FileResponse(STATIC_DIR / "index.html")
@@ -158,6 +162,34 @@ def create_app(settings: Settings) -> FastAPI:
     return app
 
 
+def _load_tuning(path: Path, core, pipeline) -> dict:
+    """Apply persisted dials (must run before the core thread starts)."""
+    try:
+        raw = json.loads(path.read_text())
+        tuning = {k: float(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not tuning:
+        return {}
+    d = pipeline.detector
+    d.conf = tuning.get("conf", d.conf)
+    d.max_area = tuning.get("max_area", d.max_area)
+    pipeline.target_fps = max(2.0, min(15.0, tuning.get("target_fps", pipeline.target_fps)))
+    t = core.thresholds
+    core.thresholds = verbs.Thresholds(
+        tuning.get("s_same", t.s_same),
+        tuning.get("s_suggest", t.s_suggest),
+        tuning.get("s_ignore", t.s_ignore),
+    )
+    return tuning
+
+
+def _remember_tuning(app, **kv: float):
+    app.state.tuning.update(kv)
+    with contextlib.suppress(OSError):
+        app.state.tuning_path.write_text(json.dumps(app.state.tuning))
+
+
 def _hello(app) -> dict:
     core, settings = app.state.core, app.state.settings
     t = core.thresholds
@@ -181,12 +213,15 @@ def _dispatch(app, m: dict):
     cmd = m.get("cmd")
     if cmd == "conf":
         pipeline.detector.conf = float(m["value"])
+        _remember_tuning(app, conf=pipeline.detector.conf)
         return
     if cmd == "max_area":
         pipeline.detector.max_area = float(m["value"])
+        _remember_tuning(app, max_area=pipeline.detector.max_area)
         return
     if cmd == "target_fps":
         pipeline.target_fps = max(2.0, min(15.0, float(m["value"])))
+        _remember_tuning(app, target_fps=pipeline.target_fps)
         return
     if cmd == "camera":
         pipeline.set_user_enabled(bool(m.get("on")))
@@ -200,6 +235,13 @@ def _dispatch(app, m: dict):
         else:
             sync.request_push([str(i) for i in m.get("object_ids", [])])
         return
+    if cmd == "thresholds":
+        _remember_tuning(
+            app,
+            s_same=float(m["s_same"]),
+            s_suggest=float(m["s_suggest"]),
+            s_ignore=float(m["s_ignore"]),
+        )
     msg = _to_message(m, cmd)
     if msg is not None:
         core.submit(msg)

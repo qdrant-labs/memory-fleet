@@ -336,7 +336,7 @@ class Core:
             ts.guesses.append(
                 {
                     "object_id": c.id,
-                    "label": c.label or "ignored look",
+                    "label": c.label,  # may be empty for unnamed blocklist entries
                     "score": round(c.score, 2),
                     "thumb": c.payload.get("thumb", ""),
                     "ignored": ignored,
@@ -378,7 +378,9 @@ class Core:
                 "object_id": ts.object_id,
                 "label": ts.label,
                 "score": round(ts.score, 3),
-                "guesses": ts.guesses if ts.state in ("unknown", "suggest") else [],
+                # suppressed tracks keep their pills too: a faint box is one
+                # click from "it's that ignored thing" or a rescue teach
+                "guesses": ts.guesses if ts.state in ("unknown", "suggest", "ignored") else [],
             }
         )
 
@@ -449,10 +451,11 @@ class Core:
             self._emit({"type": "error", "message": "teach needs a label and a seen track"})
             return
 
-        existing = self._fold_target(label, ts.last_vec)
+        existing = self._fold_target(label, ts.last_vec) or self._rescue_ignored(label, ts.last_vec)
         now = ts.last_seen
         if existing:
-            # same name AND it looks like that object: the same item re-taught
+            # same item re-taught (same name + looks like it), or a rescued
+            # blocklist entry that now carries this label
             object_id = existing
             fake = Ingest(m.tid, m.epoch, ts.last_vec, ts.last_thumb, ts.last_quality, now)
             self._maybe_accrete(object_id, fake, human=True)
@@ -497,6 +500,35 @@ class Core:
             if sim > best_sim:
                 best, best_sim = pid, sim
         return best if best_sim >= self.thresholds.s_suggest else None
+
+    def _rescue_ignored(self, label: str, vec: np.ndarray) -> str | None:
+        """Naming a view that matches a blocklist entry converts that entry into
+        a labeled object, so one physical thing stays one point. Without this,
+        the teach would spawn a sibling the blocklist keeps suppressing."""
+        res = self.store.recognize(vec)
+        best = next((c for c in res.candidates if c.kind == "ignored" and c.from_mutable), None)
+        if best is None or best.score < IGNORE_FOLD:
+            return None
+        got = self.store.get_object(best.id)
+        if got is None:
+            return None
+        payload, rows = got
+        self.store.upsert_object(
+            best.id,
+            label,
+            rows,
+            list(payload.get("views") or []),
+            kind="object",
+            neg=payload.get("neg"),
+            device=payload.get("device", "") or self.device_name,
+            event=payload.get("event", "") or self.event_tag,
+            t_created=payload.get("t_created"),
+            t_sync=None,
+            thumb=payload.get("thumb", ""),
+            base_payload=payload,
+        )
+        self._emit({"type": "object_created", "object_id": best.id, "label": label})
+        return best.id
 
     def _burst_step(self, tid: int, ts: TrackState, m: Ingest):
         if self._maybe_accrete(ts.object_id, m, human=True):
@@ -739,7 +771,7 @@ class Core:
         label = m.label.strip()
         if not label:
             return
-        existing = self._fold_target(label, ts.last_vec)
+        existing = self._fold_target(label, ts.last_vec) or self._rescue_ignored(label, ts.last_vec)
         if existing:
             fake = Ingest(m.tid, m.epoch, ts.last_vec, ts.last_thumb, ts.last_quality, ts.last_seen)
             self._maybe_accrete(existing, fake, human=True)

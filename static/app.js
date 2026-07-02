@@ -699,7 +699,7 @@ function showPop(b, cx, cy) {
       <button class="guess-pill ${g.ignored ? "ign" : ""}"
               ${g.ignored ? 'data-ign="1"' : `data-oid="${g.object_id}"`}>
         <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
-        <span>${g.ignored ? "⊘ " : ""}${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
+        <span>${g.ignored ? "⊘ " : ""}${esc(g.label || "ignored look")}<i>${g.score.toFixed(2)}</i></span>
       </button>`).join("");
     html = `<h4>is it one of these?</h4>
       <div class="guess-grid">${pills}</div>
@@ -710,7 +710,8 @@ function showPop(b, cx, cy) {
       <input type="text" id="teach-name" placeholder="or teach a new name…">
       <div class="pop-row"><button class="pop-btn" data-act="teach">teach</button></div>`;
   } else {
-    html = `<h4>unknown — teach me</h4>
+    const title = t.state === "ignored" ? "ignored look · teach to rescue" : "unknown · teach me";
+    html = `<h4>${title}</h4>
       ${guessChips(t.guesses, b.hints)}
       <input type="text" id="teach-name" placeholder="what is this?">
       <div class="pop-row">
@@ -725,9 +726,13 @@ function showPop(b, cx, cy) {
   const inp = $("teach-name");
   if (inp) { inp.focus(); inp.onkeydown = (ev) => { if (ev.key === "Enter") act("teach", t); }; }
   pop.onclick = (ev) => {
-    const el = ev.target.closest("[data-oid],[data-hint],[data-act],[data-ign]");
+    const el = ev.target.closest("[data-oid],[data-hint],[data-act],[data-ign],[data-teachfocus]");
     if (!el) return;
     const d = el.dataset;
+    if (d.teachfocus) {  // blocklisted look with no name — user types one, server rescues by similarity
+      $("teach-name")?.focus();
+      return;
+    }
     if (d.ign) {  // "it's that ignored thing" — fold this view into the blocklist
       send({ cmd: "ignore_track", tid: S.pop.tid, epoch: S.pop.epoch });
       hidePop();
@@ -748,16 +753,25 @@ function showPop(b, cx, cy) {
 }
 
 function guessChips(guesses, hints) {
-  // picture pills: nearest memories (teach that name); blue chips: detector guesses
-  const mem = (guesses || []).filter((g) => !g.ignored).map((g) => `
+  // picture pills: nearest memories (teach that name); red pills: blocklisted
+  // looks (teach binds by similarity → server rescues them); blue chips: detector guesses
+  const gs = guesses || [];
+  const mem = gs.filter((g) => !g.ignored).map((g) => `
     <button class="guess-pill sm" data-hint="${esc(g.label)}">
       <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
       <span>${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
     </button>`);
+  // named look → prefill + submit; unnamed → just focus the teach input
+  const ign = gs.filter((g) => g.ignored).map((g) => `
+    <button class="guess-pill sm ign" ${g.label ? `data-hint="${esc(g.label)}"` : 'data-teachfocus="1"'}>
+      <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
+      <span>⊘ ${esc(g.label || "ignored look")}<i>${g.score.toFixed(2)}</i></span>
+    </button>`);
+  const labels = new Set(gs.map((g) => (g.label || "").toLowerCase()).filter(Boolean));
   const det = (hints || [])
-    .filter((hd) => !(guesses || []).some((g) => g.label.toLowerCase() === hd.toLowerCase()))
+    .filter((hd) => !labels.has(hd.toLowerCase()))
     .map((hd) => `<button class="hint-chip" data-hint="${esc(hd)}">${esc(hd)}</button>`);
-  const all = [...mem, ...det];
+  const all = [...mem, ...ign, ...det];
   return all.length ? `<div class="hint-row">${all.join("")}</div>` : "";
 }
 
@@ -786,6 +800,9 @@ function hidePop() { $("popover").classList.add("hidden"); S.pop = null; }
 $("btn-unknowns").onclick = () => openDrawer("unknowns");
 $("btn-inventory").onclick = () => { openDrawer("inventory"); send({ cmd: "inventory" }); };
 $("drawer-close").onclick = () => closeDrawer();
+// the input lives OUTSIDE #drawer-body, so re-rendering the list never rebuilds
+// it — focus and caret survive every keystroke
+$("inv-filter").oninput = () => { if (S.drawerMode === "inventory") renderInventory(); };
 $("btn-tuning").onclick = () => $("tuning").classList.toggle("hidden");
 $("tuning-close").onclick = () => $("tuning").classList.add("hidden");
 $("btn-pull").onclick = () => { send({ cmd: "pull_now" }); toast("pulling fleet memory…"); };
@@ -796,6 +813,7 @@ function openDrawer(mode) {
   $("drawer-title").textContent = mode === "inventory" ? "memory · curation" : "unknowns";
   $("drawer").classList.remove("hidden");
   $("drawer-foot").classList.toggle("hidden", mode !== "inventory");
+  $("drawer-search").classList.toggle("hidden", mode !== "inventory");
   mode === "unknowns" ? renderUnknowns(true) : renderInventory();
 }
 function closeDrawer() { S.drawerMode = null; $("drawer").classList.add("hidden"); }
@@ -884,7 +902,10 @@ function renderUnknowns(force) {
     el.querySelector('[data-act="dismiss"]').onclick = () =>
       send({ cmd: "dismiss_unknown", tid: +input.dataset.tid, epoch: +input.dataset.epoch });
     el.querySelectorAll(".hint-chip, .guess-pill").forEach((chip) => {
-      chip.onclick = () => { input.value = chip.dataset.hint; doTeach(); };
+      chip.onclick = () => {
+        if (chip.dataset.hint) { input.value = chip.dataset.hint; doTeach(); }
+        else input.focus();  // unnamed blocklist look: type a name, server rescues by similarity
+      };
     });
     const img = el.querySelector(".zoomable");
     img.onclick = () => { if (img.src) openLightbox(img.src); };
@@ -894,11 +915,19 @@ function renderUnknowns(force) {
 // ---------- inventory + curation ----------
 function renderInventory() {
   const body = $("drawer-body");
-  const objects = S.inventory.filter((o) => !o.ignored);
-  const ignored = S.inventory.filter((o) => o.ignored);
+  // filter client-side by label + device; empty label reads as "ignored look"
+  // so typing "ignored" surfaces unnamed blocklist entries
+  const q = ($("inv-filter") || {}).value ? $("inv-filter").value.trim().toLowerCase() : "";
+  const match = (o) => !q
+    || (o.label || "ignored look").toLowerCase().includes(q)
+    || (o.device || "").toLowerCase().includes(q);
+  const objects = S.inventory.filter((o) => !o.ignored && match(o));
+  const ignored = S.inventory.filter((o) => o.ignored && match(o));
   let html = "";
   if (!objects.length && !ignored.length) {
-    html = `<p style="color:var(--faint);padding:8px">no memories yet — teach something</p>`;
+    html = q
+      ? `<p style="color:var(--faint);padding:8px">no memories match «${esc(q)}»</p>`
+      : `<p style="color:var(--faint);padding:8px">no memories yet — teach something</p>`;
   }
   if (objects.length) {
     html += `<div class="section-head">objects — select to push or merge</div>`;
@@ -964,7 +993,7 @@ function invRow(o) {
         ${S.selected.has(o.object_id) ? "checked" : ""}>` : ""}
       <img class="inv-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">
       <div class="inv-main">
-        <div class="inv-label">${esc(o.label || "(unnamed)")} ${badge}</div>
+        <div class="inv-label">${esc(o.label || (o.ignored ? "ignored look" : "(unnamed)"))} ${badge}</div>
         <div class="inv-meta">${o.views.length} vector${o.views.length === 1 ? "" : "s"} · ${esc(o.device || "")}</div>
       </div>
       <div class="inv-actions">${actions}</div>
