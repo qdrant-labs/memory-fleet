@@ -884,7 +884,8 @@ function renderUnknowns(force) {
   let html = "";
   if (S.archived.size) {
     html += `<div class="section-head">recently seen · left the frame, still teachable</div>`;
-    html += [...S.archived.values()].reverse().map((a) => `
+    // insertion order = chronological: new arrivals land at the bottom
+    html += [...S.archived.values()].map((a) => `
       <div class="unknown-item archived" data-key="${a.tid}:${a.epoch}" style="cursor:default">
         <img class="unk-thumb zoomable" src="${a.thumb ? "data:image/jpeg;base64," + a.thumb : ""}" alt="" title="click to enlarge">
         <div class="inv-main">

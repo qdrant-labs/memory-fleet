@@ -33,7 +33,7 @@ DIVERSITY_MAX = 0.95  # skip a new view too similar to a stored row
 NEG_CAP = 8
 BURST_VIEWS = 6  # teach burst: capture until this many views...
 BURST_SECONDS = 3.0  # ...or this much time
-ARCHIVE_CAP = 12  # departed unknowns kept teachable (wrist goes down, watch stays)
+ARCHIVE_CAP = 48  # departed unknowns kept teachable (wrist goes down, watch stays)
 IGNORE_FOLD = 0.55  # ignoring something this close to a blocklist entry grows that entry
 
 
