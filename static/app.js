@@ -745,7 +745,7 @@ function showPop(b, cx, cy) {
       <button class="guess-pill ${g.ignored ? "ign" : ""}"
               ${g.ignored ? `data-ign="1" data-iglabel="${esc(g.label)}"` : `data-oid="${g.object_id}"`}>
         <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
-        <span>${g.ignored ? "⊘ " : ""}${esc(g.label || "ignored look")}<i>${g.score.toFixed(2)}</i></span>
+        <span>${g.ignored ? "⊘ " : ""}${esc(g.label || "ignored look")}${g.n > 1 ? ` ×${g.n}` : ""}<i>${g.score.toFixed(2)}</i></span>
       </button>`).join("");
     html = `<h4>is it one of these?</h4>
       <div class="guess-grid">${pills}</div>
@@ -802,12 +802,12 @@ function guessChips(guesses, hints) {
   const mem = gs.filter((g) => !g.ignored).map((g) => `
     <button class="guess-pill sm" data-hint="${esc(g.label)}">
       <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
-      <span>${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
+      <span>${esc(g.label)}${g.n > 1 ? ` ×${g.n}` : ""}<i>${g.score.toFixed(2)}</i></span>
     </button>`);
   const ign = gs.filter((g) => g.ignored).map((g) => `
     <button class="guess-pill sm ign" data-ign="1" data-iglabel="${esc(g.label)}">
       <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
-      <span>⊘ ${esc(g.label || "ignored look")}<i>${g.score.toFixed(2)}</i></span>
+      <span>⊘ ${esc(g.label || "ignored look")}${g.n > 1 ? ` ×${g.n}` : ""}<i>${g.score.toFixed(2)}</i></span>
     </button>`);
   const labels = new Set(gs.map((g) => (g.label || "").toLowerCase()).filter(Boolean));
   const det = (hints || [])
@@ -860,23 +860,17 @@ function openDrawer(mode) {
 }
 function closeDrawer() { S.drawerMode = null; $("drawer").classList.add("hidden"); }
 
-// ---------- unknowns (live + recently departed) ----------
-function liveUnknowns() {
-  return S.boxes
-    .filter((b) => ["unknown", "pending"].includes((S.tracks.get(b.tid) || { state: "pending" }).state))
-    .sort((a, b) => b.stability - a.stability);
-}
+// ---------- unknowns (recently departed; live boxes are taught on the video) ----------
 function renderUnknownCount() {
-  $("unknown-count").textContent = liveUnknowns().length + S.archived.size;
+  $("unknown-count").textContent = S.archived.size;
 }
 
 let unkSig = "";
 function renderUnknowns(force) {
   const body = $("drawer-body");
-  const live = liveUnknowns();
   // re-render only when the SET changes — a per-frame rebuild stole input
   // focus mid-word and ate clicks on freshly-replaced buttons
-  const sig = live.map((b) => b.tid).join(",") + "|" + [...S.archived.keys()].join(",");
+  const sig = [...S.archived.keys()].join(",");
   if (!force && sig === unkSig) return;
   unkSig = sig;
   // half-typed names must survive a re-render (tracks come and go constantly)
@@ -888,17 +882,6 @@ function renderUnknowns(force) {
     if (document.activeElement === i) focusKey = k;
   });
   let html = "";
-  if (live.length) {
-    html += `<div class="section-head">in view · click to teach</div>`;
-    html += live.map((b) => `
-      <div class="unknown-item" data-tid="${b.tid}">
-        <div class="inv-main">
-          <div class="inv-label">track ${b.tid}</div>
-          <div class="stab" style="width:${Math.min(b.stability * 8, 100)}%"></div>
-        </div>
-        <span class="inv-meta">teach →</span>
-      </div>`).join("");
-  }
   if (S.archived.size) {
     html += `<div class="section-head">recently seen · left the frame, still teachable</div>`;
     html += [...S.archived.values()].reverse().map((a) => `
@@ -916,16 +899,6 @@ function renderUnknowns(force) {
   }
   body.innerHTML = html || `<p style="color:var(--faint);padding:8px">nothing unknown · show me something new</p>`;
 
-  body.querySelectorAll(".unknown-item:not(.archived)").forEach((el) => {
-    el.onclick = () => {
-      const b = S.boxes.find((x) => x.tid === +el.dataset.tid);
-      const m = mapping();
-      if (b && m) {
-        showPop(b, (m.x + b.box[0] * m.w) / devicePixelRatio + 20,
-                   (m.y + b.box[1] * m.h) / devicePixelRatio + 20);
-      }
-    };
-  });
   body.querySelectorAll(".archived").forEach((el) => {
     const input = el.querySelector("input");
     const key = input.dataset.tid + ":" + input.dataset.epoch;
@@ -1072,8 +1045,13 @@ function invRow(o, cls = "") {
          <button class="mini-btn" data-act="ignore" title="blocklist">⊘</button>
          <button class="mini-btn" data-act="forget" title="forget">✕</button>`
       : "";
+  // the unit is the location: hovering answers "where and when was this last seen?"
+  const where = o.local ? "this unit" : (o.device || "fleet");
+  const hover = o.last_seen
+    ? `last seen ${relTime(o.last_seen)} · ${where}`
+    : o.created ? `learned ${relTime(o.created)} · ${where}` : where;
   return `
-    <div class="inv-item ${cls}" data-id="${o.object_id}">
+    <div class="inv-item ${cls}" data-id="${o.object_id}" title="${esc(hover)}">
       ${o.local ? `<input type="checkbox" class="inv-check" data-id="${o.object_id}"
         ${S.selected.has(o.object_id) ? "checked" : ""}>` : ""}
       <img class="inv-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">
@@ -1141,8 +1119,16 @@ function initSliders(t, conf, maxArea, targetFps) {
   };
   const sendT = () => send({ cmd: "thresholds", s_same: +$("s-same").value,
                              s_suggest: +$("s-suggest").value, s_ignore: +$("s-ignore").value });
-  wire("s-same", "v-same", t.s_same, sendT);
-  wire("s-suggest", "v-suggest", t.s_suggest, sendT);
+  // suggest can never sit above recognize — dragging one past the other drags both
+  const pairT = (other, vOther) => {
+    if (+$("s-suggest").value > +$("s-same").value) {
+      $(other).value = $(other === "s-same" ? "s-suggest" : "s-same").value;
+      $(vOther).textContent = (+$(other).value).toFixed(2);
+    }
+    sendT();
+  };
+  wire("s-same", "v-same", t.s_same, () => pairT("s-suggest", "v-suggest"));
+  wire("s-suggest", "v-suggest", t.s_suggest, () => pairT("s-same", "v-same"));
   wire("s-ignore", "v-ignore", t.s_ignore, sendT);
   wire("s-conf", "v-conf", conf, () => send({ cmd: "conf", value: +$("s-conf").value }));
   wire("s-area", "v-area", maxArea, () => send({ cmd: "max_area", value: +$("s-area").value }),
@@ -1170,7 +1156,7 @@ function setCamera(on) {
     S.boxes = [];
     draw();
     renderUnknownCount();
-    if (S.drawerMode === "unknowns") renderUnknowns();  // "in view" list must empty
+    if (S.drawerMode === "unknowns") renderUnknowns();
   }
 }
 function setFleet(on) {
@@ -1187,8 +1173,8 @@ function setFleet(on) {
     pill.className = "pill on";
     $("fleet-label").textContent = "FLEET LINKED";
     pill.dataset.tip = "Connected to the shared fleet memory (Qdrant Cloud). Objects you " +
-      "curate and push become recognizable to every unit in the fleet; new fleet " +
-      "memories arrive here automatically (~30 s).";
+      "teach sync to the fleet automatically, becoming recognizable to every unit; " +
+      "new fleet memories arrive here the same way (~30 s).";
   } else {
     pill.className = "pill off";
     $("fleet-label").textContent = "FLEET OFFLINE";

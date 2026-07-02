@@ -29,6 +29,11 @@ class Thresholds:
     s_suggest: float = S_SUGGEST
     s_ignore: float = S_IGNORE
 
+    def __post_init__(self):
+        # the ask band lives between suggest and same: an inverted pair
+        # (stale tuning.json, old client) collapses the band, never crosses it
+        self.s_suggest = min(self.s_suggest, self.s_same)
+
 
 @dataclass(slots=True)
 class Decision:

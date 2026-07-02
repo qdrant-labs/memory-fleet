@@ -315,7 +315,6 @@ aside.hidden { transform: translateX(107%); box-shadow: none; }
   border-radius: 6px; padding: 4px 9px; font-size: 12.5px; cursor: pointer; font-family: var(--mono);
 }
 .mini-btn:hover { color: var(--text); border-color: var(--red); }
-.stab { height: 4px; border-radius: 2px; background: var(--blue); opacity: .7; margin-top: 5px; }
 .teach-inline { display: flex; gap: 6px; margin-top: 7px; }
 .teach-inline input {
   flex: 1; background: var(--well); border: 1px solid var(--border); border-radius: 6px;
@@ -369,7 +368,7 @@ aside.hidden { transform: translateX(107%); box-shadow: none; }
   display: flex; margin-top: 16px; border-radius: 5px; overflow: hidden; height: 22px;
   font-family: var(--mono); font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
 }
-#tier-band .band { display: flex; align-items: center; justify-content: center; color: var(--well); font-weight: 700; }
+#tier-band .band { display: flex; align-items: center; justify-content: center; color: var(--well); font-weight: 700; overflow: hidden; white-space: nowrap; }
 .band.unknown { background: var(--blue); }
 .band.suggest { background: var(--amber); }
 .band.same { background: var(--green); }

@@ -339,17 +339,28 @@ class Core:
         res = self.store.recognize(m.vec)
         self._emit({"type": "query", "tid": m.tid, "ms": res.latency_ms, "searched": res.searched})
         d = decide(m.vec, res.candidates, self.thresholds, ts.vetoed, self.session_negs)
-        # nearest memories as picture pills: at suggest tier you pick WHICH
-        # instance it is; at unknown tier they're one-click teach options.
-        # Ignored entries ride along (flagged) — "it's that thing I ignored"
-        # is a one-click answer too.
-        ts.guesses = []
+        # nearest memories as picture pills, ONE per name: five hats propose
+        # "hat" once, riding the best-scoring instance — a click confirms,
+        # teaches, or ignores THAT point, so placement is automatic. Ignored
+        # entries ride along (flagged); unnamed blocklist looks collapse too
+        # (the ignore fold picks its own nearest entry anyway).
+        nameable = []
         for c in res.candidates:
             if c.payload.get("synthetic") or c.score < 0.3:
                 continue
             ignored = c.kind == "ignored"
             if not ignored and not c.label:
                 continue
+            nameable.append((("ign:" if ignored else "obj:") + c.label.strip().lower(), ignored, c))
+        siblings: dict[str, int] = {}
+        for key, _, _ in nameable:
+            siblings[key] = siblings.get(key, 0) + 1
+        ts.guesses = []
+        seen: set[str] = set()
+        for key, ignored, c in nameable:  # score-sorted: first hit = best instance
+            if key in seen:
+                continue
+            seen.add(key)
             ts.guesses.append(
                 {
                     "object_id": c.id,
@@ -357,6 +368,7 @@ class Core:
                     "score": round(c.score, 2),
                     "thumb": c.payload.get("thumb", ""),
                     "ignored": ignored,
+                    "n": siblings[key],  # same-name instances behind this pill
                 }
             )
             if len(ts.guesses) == 3:
@@ -829,9 +841,10 @@ class Core:
         self._emit(
             {
                 "type": "thresholds",
-                "s_same": m.s_same,
-                "s_suggest": m.s_suggest,
-                "s_ignore": m.s_ignore,
+                # echo the CLAMPED values (suggest never sits above same)
+                "s_same": self.thresholds.s_same,
+                "s_suggest": self.thresholds.s_suggest,
+                "s_ignore": self.thresholds.s_ignore,
             }
         )
 
