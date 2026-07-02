@@ -15,6 +15,14 @@ import numpy as np
 
 os.environ.setdefault("YOLO_AUTOINSTALL", "false")  # no pip calls at runtime
 
+try:
+    # torch-MPS autoreleases Metal objects per inference; a pure Python loop never
+    # drains the pool, leaking ~80 MB/min live. Wrap every model call (measured
+    # fix: docs/spikes/spike_mps_leak.py).
+    from objc import autorelease_pool
+except ImportError:  # non-macOS: nothing to drain
+    from contextlib import nullcontext as autorelease_pool
+
 logger = logging.getLogger(__name__)
 
 WEIGHTS = "yoloe-11l-seg-pf.pt"  # auto-downloads to repo root (gitignored)
@@ -63,7 +71,8 @@ class Detector:
     def warm(self):
         self.load()
         dummy = np.zeros((360, 640, 3), dtype=np.uint8)
-        self.model.predict(dummy, device=self.device, imgsz=IMGSZ, verbose=False)
+        with autorelease_pool():
+            self.model.predict(dummy, device=self.device, imgsz=IMGSZ, verbose=False)
 
     def reset(self):
         """Fresh tracker state for a new session (track ids keep counting up)."""
@@ -75,17 +84,18 @@ class Detector:
         """Detect + track one frame. Returns (proposals, detect_ms)."""
         h, w = frame_bgr.shape[:2]
         t0 = time.perf_counter_ns()
-        result = self.model.track(
-            frame_bgr,
-            device=self.device,
-            conf=self.conf,
-            imgsz=IMGSZ,
-            max_det=MAX_DET,
-            # one physical item must not survive NMS as several class-named boxes
-            agnostic_nms=True,
-            persist=True,
-            verbose=False,
-        )[0]
+        with autorelease_pool():
+            result = self.model.track(
+                frame_bgr,
+                device=self.device,
+                conf=self.conf,
+                imgsz=IMGSZ,
+                max_det=MAX_DET,
+                # one physical item must not survive NMS as several class-named boxes
+                agnostic_nms=True,
+                persist=True,
+                verbose=False,
+            )[0]
         detect_ms = (time.perf_counter_ns() - t0) / 1e6
 
         proposals: list[Proposal] = []

@@ -18,6 +18,9 @@ dependencies = [
 perception = [
     "ultralytics>=8.3",
     "lap>=0.5.12",  # BoT-SORT assignment; ultralytics runtime auto-install is disabled
+    # torch-MPS inference leaks autoreleased Metal objects in pure Python loops
+    # (~80 MB/min measured); draining a pool per frame flattens it (spike_mps_leak.py)
+    "pyobjc-core>=10; sys_platform == 'darwin'",
     "fastembed>=0.7.4",
     "opencv-python>=4.12.0",
 ]

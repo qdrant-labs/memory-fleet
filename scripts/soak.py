@@ -9,8 +9,9 @@ them to a worker), and the query hits a seeded Edge shard.
 """
 
 import argparse
-import resource
+import os
 import shutil
+import subprocess
 import tempfile
 import time
 import uuid
@@ -70,7 +71,9 @@ def seeded_shard(path: Path, n: int):
 
 
 def rss_mb() -> float:
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1 << 20)  # macOS: bytes
+    """CURRENT rss via ps — ru_maxrss is a lifetime high-water mark, which lets
+    an early allocation spike mask steady growth underneath it."""
+    return int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(os.getpid())])) / 1024
 
 
 def main():
@@ -167,7 +170,8 @@ def main():
         f" | embed/crop med {np.median(embed_ms) if embed_ms else 0:.1f} ms"
         f" | query med {np.median(query_ms) if query_ms else 0:.2f} ms | embeds {embeds}"
     )
-    print(f"rss peak {rss_mb():.0f} MB, final-quarter growth {growth:+.0f} MB")
+    peak = max([r for _, r in rss_track] + [rss_mb()])
+    print(f"rss peak {peak:.0f} MB, final-quarter growth {growth:+.0f} MB")
     ok_fps = fps >= 2.0
     ok_mem = growth < 100
     print(f"VERDICT: fps {'PASS' if ok_fps else 'FAIL'} | memory {'PASS' if ok_mem else 'FAIL'}")

@@ -40,6 +40,11 @@ stop and flag — don't silently patch.
   filter payloads in-process instead); `scroll` returns `(records, offset)`.
 - Ultralytics tracking needs `lap` pinned explicitly — we set
   `YOLO_AUTOINSTALL=false` so it can't pip-install at runtime.
+- **torch-MPS leaks ~80 MB/min** in pure-Python inference loops (autoreleased
+  Metal objects, invisible to `torch.mps` accounting). Every detector call must
+  stay wrapped in `objc.autorelease_pool()` (`docs/spikes/spike_mps_leak.py`).
+  When measuring memory, use current RSS via `ps`, never `ru_maxrss` — the
+  high-water mark hides creep under early spikes.
 - An empty Edge-created shard CAN seed straight from a partial snapshot
   (manifest of empty shard → `partial/create` → `update_from_snapshot`), so
   seed and pull share one code path — verified in `tests/sync/`.
