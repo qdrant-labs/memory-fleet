@@ -290,7 +290,7 @@ function drawBox(x, y, w, h, state, t, b) {
   if (state === "recognized") {
     chip(x, y - 8 * devicePixelRatio, ` ${t.label} · ${t.score.toFixed(2)} `, c);
   } else if (state === "suggest") {
-    chip(x, y - 8 * devicePixelRatio, ` ${t.label}? tap to answer `, c);
+    chip(x, y - 8 * devicePixelRatio, ` ${t.label}? `, c);
   } else if (state === "capturing") {
     const bp = S.bursts.get(b.tid) || { have: 0, want: 6 };
     burstRing(x + w / 2, y + h / 2, Math.min(w, h) * 0.28, bp.have / bp.want);
@@ -711,7 +711,7 @@ view.addEventListener("click", (e) => {
   const px = e.offsetX * devicePixelRatio, py = e.offsetY * devicePixelRatio;
   // generous hit region: union of the drawn (eased) and latest detected box —
   // a moving object outruns its 8 Hz box — plus padding and the chip strip
-  // above the box, so clicking "«item»? tap to answer" works too
+  // above the box, so clicking the "«item»?" chip works too
   const pad = 6 * devicePixelRatio, chip = 30 * devicePixelRatio;
   let best = null, bestArea = Infinity;
   for (const b of S.boxes) {
