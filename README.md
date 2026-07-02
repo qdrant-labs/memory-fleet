@@ -2,6 +2,8 @@
 
 Shared object memory on Qdrant Edge: every device remembers what any device learned.
 
+![Fleet Memory mission control: live feed with recognized objects, memory map, and fleet search](docs/screenshot-ui.png)
+
 ## The Idea
 
 Show a device an object once, give it a name, and every device in the fleet can
