@@ -2,10 +2,10 @@
 
 Shared object memory on Qdrant Edge — a demo. Webcam → class-agnostic
 detection → **names come from vector search only** (humans teach unknowns) →
-local Edge shards sync with a central fleet collection (Qdrant Cloud or
-Docker) so every device knows what any device learned. The repo is named
-`hive-mind` for historical reasons; the demo's display name is **Fleet
-Memory** and the shared server is "the fleet" everywhere in code and UI.
+local Edge shards sync with a central fleet collection in Qdrant Cloud so
+every device knows what any device learned. The repo is named `hive-mind`
+for historical reasons; the demo's display name is **Fleet Memory** and the
+shared server is "the fleet" everywhere in code and UI.
 
 **Read `PLAN.md` before doing anything.** It is the build contract: decided
 semantics, architecture, spike evidence. If reality contradicts it, stop and
@@ -16,14 +16,17 @@ below and win over the plan text.
 earned, or the project state changes, update the relevant section here in the
 same working session — this file is the project's memory between sessions.
 
-## Current state (2026-07-01)
+## Current state (2026-07-01, end of day)
 
-All six PLAN.md §8 phases are built and green. The app works end-to-end:
-`make run` → http://127.0.0.1:8765, live teach/recognize, curated push/pull
-against Dylan's Qdrant Cloud cluster (his `.env`, collection `fleet`), 100k
-scale stunt (S key, after `make demo-scale`). Two feedback rounds from live
-use are folded in. Not yet done: golden demo state (`make demo-save` after a
-real teaching session), README demo-script rehearsal, second-laptop test.
+All six PLAN.md §8 phases are built and green, plus five rounds of feedback
+from Dylan's live use. The app works end-to-end: `make run` →
+http://127.0.0.1:8765, live teach/recognize with picture-pill suggestions,
+hybrid search, curated push/pull against Dylan's Qdrant Cloud cluster
+(`.env`; the `fleet` collection is auto-created), 300k-memory scale stunt
+(S key, after `make demo-scale`). Local data + fleet collection were CLEARED
+2026-07-01 for a fresh start under the instance model. Not yet done: golden
+demo state (`make demo-save` after a real teaching session), README
+demo-script rehearsal, second-laptop test.
 
 ## Layout
 
@@ -33,8 +36,9 @@ real teaching session), README demo-script rehearsal, second-laptop test.
 - `static/` — vanilla-JS UI (no build step), Qdrant-branded mission-control
   theme; brand SVGs in `static/brand/`.
 - `tests/gate` (deterministic, mock geometry, real Edge shards, run before
-  every commit), `tests/sync` (needs `make fleet-up`), `tests/smoke` +
-  `tests/drive` (real models, local), `scripts/` (soak, scale, demo-check).
+  every commit), `tests/sync` (runs against the Cloud cluster in `.env`),
+  `tests/smoke` + `tests/drive` (real models, local), `scripts/` (soak,
+  scale, demo-check).
 
 ## Decisions since PLAN.md (these override the plan)
 
@@ -91,9 +95,23 @@ real teaching session), README demo-script rehearsal, second-laptop test.
   rescuable. Repeated ignores fold views into ONE blocklist entry
   (IGNORE_FOLD). VIEW_CAP raised 12 → 24; at cap, a human view replaces the
   most redundant auto view so confirms never stop teaching.
-- **Unknowns carry guesses**: top-3 nearest memories (teach-fold one-click)
-  + YOLOE class names (the ONLY other use of detector labels — hints, never
-  auto-naming).
+- **Guesses are picture pills**: unknown and suggest tracks carry the top-3
+  nearest memories (object_id + label + score + thumb). At suggest tier a
+  pill CONFIRMS that specific instance; at unknown tier it teaches that
+  name; ignored entries ride along red-flagged (click = fold into the
+  blocklist). YOLOE class names appear as extra teach hints — the only
+  other use of detector labels, never auto-naming.
+- **"Memories" = exemplar VECTORS, not points** (Dylan): HUD/metrics/searched
+  all report `store.vector_count()` (lazy recount after mutations; the scale
+  shard contributes 3×count by construction). "Objects" = named instances.
+- **Live ingest is paced** (Dylan's M5 ran hot): frames are read at camera
+  rate but detection runs at TARGET_FPS=8 — unpaced, MPS sat at 100% duty
+  for ~13 fps nobody needed. Drive mode stays unpaced for tests.
+- **Merge is same-kind only** (object+object or ignored+ignored) and
+  preserves `kind` — a re-upsert without `kind`/`base_payload` silently
+  corrupts points; every re-upsert call site must pass both.
+- Ignoring a RECOGNIZED box ignores the bound OBJECT (label + views move to
+  the blocklist), not a one-view phantom.
 - **Label-fold push rewrites the local point under the fleet id** so the
   §3.3 id-present dedup applies verbatim on the next pull.
 - **Empty-delta pulls are skipped** (zero-byte body or tar without
@@ -135,6 +153,6 @@ real teaching session), README demo-script rehearsal, second-laptop test.
   completeness. No feature not in PLAN.md without asking Dylan.
 - Tests are in-tree; no CI (cut 2026-07-01). Run lint + `tests/gate` +
   `tests/sync` before every commit (`tests/gate` must stay fast and
-  deterministic; sync needs `make fleet-up`).
+  deterministic; sync needs the Cloud `.env` and skips without it).
 - Commits: subject-only, imperative, 5–10 words; commit freely for
   snapshots/rollbacks (Dylan, 2026-07-01) — but never push unasked.
