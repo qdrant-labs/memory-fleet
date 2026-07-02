@@ -27,6 +27,9 @@ const S = {
   mapPoints: [],
   scaleOn: false,
   t0: Date.now(),
+  frameSeq: 0,   // decode-order guard: a slow JPEG must not overwrite a newer one
+  shownSeq: 0,
+  dirty: true,   // the rAF loop repaints only when something changed
 };
 
 // ---------- websocket ----------
@@ -38,9 +41,9 @@ ws.onmessage = (e) => {
 ws.onclose = () => {
   S.dead = true;
   $("unit-dot").className = "unit-dot off";
-  $("no-feed").textContent = "connection lost — reload the page";
+  $("no-feed").textContent = "connection lost · reload the page";
   $("no-feed").style.display = "flex";
-  toast("connection lost — reload");
+  toast("connection lost · reload");
 };
 
 const handlers = {
@@ -56,27 +59,19 @@ const handlers = {
     send({ cmd: "map" });
   },
   frame(m) {
+    // live: video-only frames at ~24 fps (boxes arrive separately at ~8 Hz and
+    // the rAF loop interpolates); drive mode still sends boxes on the frame
+    const seq = ++S.frameSeq;
     const img = new Image();
-    img.onload = () => { S.frame = img; draw(); };
+    img.onload = () => { if (seq >= S.shownSeq) { S.shownSeq = seq; S.frame = img; S.dirty = true; } };
     img.src = "data:image/jpeg;base64," + m.jpg;
-    S.boxes = m.boxes;
-    $("t-detect").textContent = m.detect_ms + " ms";
-    const seen = new Set(m.boxes.map((b) => b.tid));
-    for (const b of m.boxes) {
-      const t = S.tracks.get(b.tid);
-      if (t && t.epoch !== b.epoch) { S.tracks.delete(b.tid); S.bursts.delete(b.tid); }
-    }
-    for (const tid of [...S.bursts.keys()]) if (!seen.has(tid)) S.bursts.delete(tid);
-    renderUnknownCount();
-    if (S.drawerMode === "unknowns") renderUnknowns();
+    vfpsTick();
+    if (m.boxes !== undefined) applyBoxes(m);
   },
+  boxes(m) { applyBoxes(m); },
   perf(m) {
     $("t-fps").textContent = m.fps.toFixed(1);
-    $("m-detect").textContent = m.detect_ms;
-    if (m.embed_ms) {
-      $("m-embed").textContent = m.embed_ms.toFixed(1);
-      $("t-embed").textContent = m.embed_ms.toFixed(1) + " ms";
-    }
+    if (m.embed_ms) $("t-embed").textContent = m.embed_ms.toFixed(1) + " ms";
   },
   query(m) {
     S.latencies.push(m.ms);
@@ -90,6 +85,7 @@ const handlers = {
   track_update(m) {
     const prev = S.tracks.get(m.tid);
     S.tracks.set(m.tid, m);
+    S.dirty = true;
     if (m.state !== "capturing") S.bursts.delete(m.tid);
     if (m.state === "recognized" && (!prev || prev.object_id !== m.object_id)) {
       pulseMapNode(m.object_id);
@@ -97,15 +93,15 @@ const handlers = {
     if (S.pop && S.pop.tid === m.tid && m.state === "recognized") hidePop();
     if (S.drawerMode === "unknowns") renderUnknowns();
   },
-  burst_progress(m) { S.bursts.set(m.tid, m); },
+  burst_progress(m) { S.bursts.set(m.tid, m); S.dirty = true; },
   stats(m) { S.memories = m.memories; bumpCounts(); },
   fleet_status(m) {
     setFleet(m.online);
-    toast(m.online ? "fleet linked — memories syncing" : "fleet unreachable — running local");
+    toast(m.online ? "fleet linked · memories syncing" : "fleet unreachable · running local");
   },
   camera(m) { setCamera(m.on); },
   object_created(m) {
-    toast(`taught «${m.label}» — it will remember`);
+    toast(`taught «${m.label}» · it will remember`);
     memPulse();
     refreshData();
   },
@@ -138,7 +134,7 @@ const handlers = {
     refreshData();
   },
   push_done(m) {
-    toast(m.count ? `${m.count} pushed — every unit now knows` : "nothing to push");
+    toast(m.count ? `${m.count} pushed · every unit now knows` : "nothing to push");
     refreshData();
   },
   fleet_error(m) { toast(`fleet: ${m.message}`); },
@@ -153,10 +149,24 @@ const handlers = {
   scale(m) {
     S.scaleOn = m.on;
     $("scale-banner").classList.toggle("hidden", !m.on);
-    toast(m.on ? "⚡ 100k memories attached — watch the latency" : "stunt shard detached");
+    toast(m.on ? "⚡ 300k memories attached · watch the latency" : "stunt shard detached");
   },
   error(m) { toast(m.message); },
 };
+
+function applyBoxes(m) {
+  S.boxes = m.boxes;
+  S.dirty = true;
+  $("t-detect").textContent = m.detect_ms + " ms";
+  const seen = new Set(m.boxes.map((b) => b.tid));
+  for (const b of m.boxes) {
+    const t = S.tracks.get(b.tid);
+    if (t && t.epoch !== b.epoch) { S.tracks.delete(b.tid); S.bursts.delete(b.tid); }
+  }
+  for (const tid of [...S.bursts.keys()]) if (!seen.has(tid)) S.bursts.delete(tid);
+  renderUnknownCount();
+  if (S.drawerMode === "unknowns") renderUnknowns();
+}
 
 function refreshData() { send({ cmd: "inventory" }); send({ cmd: "map" }); }
 
@@ -182,15 +192,52 @@ function fit() {
   view.width = view.clientWidth * devicePixelRatio;
   view.height = view.clientHeight * devicePixelRatio;
   fitMap();
+  fitSpark();
 }
-addEventListener("resize", () => { fit(); draw(); drawMap(); });
+addEventListener("resize", () => { fit(); draw(); drawMap(); drawSpark(); });
 
 function mapping() {
   if (!S.frame) return null;
   const s = Math.min(view.width / S.frame.width, view.height / S.frame.height);
   const w = S.frame.width * s, h = S.frame.height * s;
-  return { x: (view.width - w) / 2, y: (view.height - h) / 2, w, h };
+  return { x: (view.width - w) / 2, y: 0, w, h }; // top-anchored; band sits below
 }
+
+// ---------- render loop ----------
+// Boxes arrive at detect rate (~8 Hz) while video streams at ~24 fps; each
+// displayed box eases toward its latest detection so motion reads smooth.
+const disp = new Map(); // tid -> currently displayed [x1, y1, x2, y2]
+let lastAnimT = performance.now();
+function animate(t) {
+  requestAnimationFrame(animate);
+  const dt = Math.min(t - lastAnimT, 100);
+  lastAnimT = t;
+  let moving = false;
+  const alive = new Set();
+  for (const b of S.boxes) {
+    alive.add(b.tid);
+    const cur = disp.get(b.tid);
+    if (!cur) { disp.set(b.tid, b.box.slice()); moving = true; continue; }
+    const k = 1 - Math.exp(-dt / 90); // ~90 ms settle, frame-rate independent
+    for (let i = 0; i < 4; i++) {
+      const d = b.box[i] - cur[i];
+      if (Math.abs(d) > 0.0004) { cur[i] += d * k; moving = true; }
+      else cur[i] = b.box[i];
+    }
+  }
+  for (const tid of [...disp.keys()]) if (!alive.has(tid)) disp.delete(tid);
+  if (S.dirty || moving) { S.dirty = false; draw(); }
+}
+requestAnimationFrame(animate);
+
+// displayed video rate (received frames, 2 s window)
+const vTimes = [];
+function vfpsTick() {
+  const t = performance.now();
+  vTimes.push(t);
+  while (vTimes.length && t - vTimes[0] > 2000) vTimes.shift();
+}
+setInterval(() => { $("t-vfps").textContent = (vTimes.length / 2).toFixed(0); }, 1000);
 
 let tickerRect = "";
 function draw() {
@@ -213,7 +260,7 @@ function draw() {
   for (const b of S.boxes) {
     const t = S.tracks.get(b.tid) || { state: "pending" };
     const st = t.state === "capturing" && S.bursts.has(b.tid) ? "capturing" : t.state;
-    const [x1, y1, x2, y2] = b.box;
+    const [x1, y1, x2, y2] = disp.get(b.tid) || b.box; // eased position
     drawBox(m.x + x1 * m.w, m.y + y1 * m.h, (x2 - x1) * m.w, (y2 - y1) * m.h, st, t, b);
   }
 }
@@ -286,24 +333,46 @@ function burstRing(cx, cy, r, frac) {
   ctx.stroke();
 }
 
-// ---------- sparkline ----------
+// ---------- sparkline (rolling recognition-query latency) ----------
 const spark = $("spark"), sctx = spark.getContext("2d");
+function fitSpark() {
+  spark.width = spark.clientWidth * devicePixelRatio;
+  spark.height = spark.clientHeight * devicePixelRatio;
+}
 function drawSpark() {
-  const w = spark.width, h = spark.height;
+  const w = spark.width, h = spark.height, dpr = devicePixelRatio;
+  if (!w) return;
   sctx.clearRect(0, 0, w, h);
   if (S.latencies.length < 2) return;
   const max = Math.max(...S.latencies, 0.5);
-  sctx.strokeStyle = "rgba(52, 240, 176, .25)";
-  sctx.beginPath(); sctx.moveTo(0, h - 3); sctx.lineTo(w, h - 3); sctx.stroke();
+  const n = S.latencies.length;
+  const px = (i) => 3 * dpr + (i / (n - 1)) * (w - 10 * dpr);
+  const py = (v) => h - 4 * dpr - (v / max) * (h - 14 * dpr);
+  // recessive baseline
+  sctx.strokeStyle = "rgba(58, 240, 180, .18)";
+  sctx.lineWidth = 1;
+  sctx.beginPath(); sctx.moveTo(0, h - 3 * dpr); sctx.lineTo(w, h - 3 * dpr); sctx.stroke();
+  // area wash under the line
   sctx.beginPath();
-  sctx.strokeStyle = "#34f0b0";
-  sctx.lineWidth = 1.5;
-  S.latencies.forEach((v, i) => {
-    const x = (i / (S.latencies.length - 1)) * w;
-    const y = h - 4 - (v / max) * (h - 12);
-    i ? sctx.lineTo(x, y) : sctx.moveTo(x, y);
-  });
+  S.latencies.forEach((v, i) => (i ? sctx.lineTo(px(i), py(v)) : sctx.moveTo(px(0), py(v))));
+  sctx.lineTo(px(n - 1), h - 3 * dpr); sctx.lineTo(px(0), h - 3 * dpr); sctx.closePath();
+  sctx.fillStyle = "rgba(58, 240, 180, .09)";
+  sctx.fill();
+  // the line itself
+  sctx.beginPath();
+  S.latencies.forEach((v, i) => (i ? sctx.lineTo(px(i), py(v)) : sctx.moveTo(px(0), py(v))));
+  sctx.strokeStyle = "#3af0b4";
+  sctx.lineWidth = 2 * dpr;
+  sctx.lineJoin = sctx.lineCap = "round";
   sctx.stroke();
+  // current value: dot with a punched surface ring
+  const lx = px(n - 1), ly = py(S.latencies[n - 1]);
+  sctx.save();
+  sctx.globalCompositeOperation = "destination-out";
+  sctx.beginPath(); sctx.arc(lx, ly, 5 * dpr, 0, Math.PI * 2); sctx.fill();
+  sctx.restore();
+  sctx.beginPath(); sctx.arc(lx, ly, 3 * dpr, 0, Math.PI * 2);
+  sctx.fillStyle = "#3af0b4"; sctx.fill();
 }
 
 function fmtMs(ms) { return ms < 1 ? `${Math.round(ms * 1000)} µs` : `${ms.toFixed(1)} ms`; }
@@ -323,7 +392,7 @@ function renderMemories() {
   const objs = S.inventory.filter((o) => !o.ignored && o.created)
     .sort((a, b) => b.created - a.created).slice(0, 12);
   if (!objs.length) {
-    box.innerHTML = `<div class="mem-none">nothing remembered yet — teach me something</div>`;
+    box.innerHTML = `<div class="mem-none">nothing remembered yet · teach me something</div>`;
     return;
   }
   box.innerHTML = objs.map((o) => `
@@ -332,7 +401,7 @@ function renderMemories() {
       <div class="mem-main">
         <div class="mem-label">${esc(o.label)}</div>
         <div class="mem-meta">${o.views.length} vector${o.views.length === 1 ? "" : "s"}
-          · learned ${relTime(o.created)}${o.sightings ? ` · seen ${o.sightings}×` : ""}${o.local ? "" : " · fleet"}</div>
+          · learned ${relTime(o.created)}${o.sightings ? ` · seen ${o.sightings}×` : ""}${o.local ? "" : ` · ${esc(o.device || "fleet")}`}</div>
       </div>
     </div>`).join("");
   box.querySelectorAll(".mem-row").forEach((el) => {
@@ -367,11 +436,15 @@ function memPulse() {
 }
 
 // ---------- memory map (constellation) ----------
+// Points only — labels live in the hover tip so a dense hive stays readable.
+// Wheel zooms (cursor-anchored), drag pans, double-click or ⌂ resets.
 const mapC = $("map-canvas"), mctx = mapC.getContext("2d");
 const mapPulses = new Map(); // object_id -> pulse start time
+const mapView = { k: 1, tx: 0, ty: 0 };
 function fitMap() {
   mapC.width = mapC.clientWidth * devicePixelRatio;
   mapC.height = mapC.clientHeight * devicePixelRatio;
+  clampMapView();
 }
 function pulseMapNode(oid) {
   mapPulses.set(oid, performance.now());
@@ -380,7 +453,9 @@ function pulseMapNode(oid) {
 function mapPts() {
   const w = mapC.width, h = mapC.height, pad = 22 * devicePixelRatio;
   return S.mapPoints.map((p) => ({
-    ...p, px: pad + p.x * (w - pad * 2), py: pad + p.y * (h - pad * 2),
+    ...p,
+    px: (pad + p.x * (w - pad * 2)) * mapView.k + mapView.tx,
+    py: (pad + p.y * (h - pad * 2)) * mapView.k + mapView.ty,
   }));
 }
 
@@ -391,10 +466,10 @@ function drawMap() {
   const pts = mapPts();
   const now = performance.now();
   let livePulse = false;
-  mctx.font = `${9.5 * devicePixelRatio}px "JetBrains Mono", ui-monospace, monospace`;
   for (const p of pts) {
+    if (p.px < -20 || p.px > w + 20 || p.py < -20 || p.py > h + 20) continue;
     const hit = !S.searchHits || S.searchHits.has(p.object_id);
-    const color = p.local ? "#dc244c" : "#34f0b0";
+    const color = p.local ? "#dc244c" : "#3af0b4";
     mctx.globalAlpha = hit ? 1 : 0.15;
     const pulse = mapPulses.get(p.object_id);
     if (pulse !== undefined) {
@@ -416,14 +491,55 @@ function drawMap() {
     mctx.arc(p.px, p.py, (S.searchHits && hit ? 5 : 3.5) * devicePixelRatio, 0, Math.PI * 2);
     mctx.fill();
     mctx.shadowBlur = 0;
-    mctx.fillStyle = "#b0b4d2";
-    mctx.fillText(p.label.slice(0, 13), p.px + 8 * devicePixelRatio, p.py + 3 * devicePixelRatio);
   }
   mctx.globalAlpha = 1;
   if (livePulse) requestAnimationFrame(drawMap);
 }
 
-// map hover -> preview; click -> search that memory
+// zoom + pan
+function clampMapView() {
+  const w = mapC.width, h = mapC.height, k = mapView.k;
+  mapView.tx = Math.min(0, Math.max(w * (1 - k), mapView.tx));
+  mapView.ty = Math.min(0, Math.max(h * (1 - k), mapView.ty));
+}
+function setMapZoom(k, cx, cy) {
+  const k0 = mapView.k;
+  k = Math.min(16, Math.max(1, k));
+  if (k === k0) return;
+  mapView.tx = cx - ((cx - mapView.tx) * k) / k0;
+  mapView.ty = cy - ((cy - mapView.ty) * k) / k0;
+  mapView.k = k;
+  if (k === 1) { mapView.tx = 0; mapView.ty = 0; }
+  clampMapView();
+  mapC.classList.toggle("pannable", k > 1);
+  $("map-reset").classList.toggle("hidden", k === 1);
+  drawMap();
+}
+function resetMapView() { setMapZoom(1, 0, 0); }
+$("map-reset").onclick = resetMapView;
+mapC.addEventListener("dblclick", resetMapView);
+mapC.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const dpr = devicePixelRatio;
+  setMapZoom(mapView.k * Math.exp(-e.deltaY * 0.0015), e.offsetX * dpr, e.offsetY * dpr);
+}, { passive: false });
+
+let mapDrag = null, mapDragged = false;
+mapC.addEventListener("pointerdown", (e) => {
+  if (mapView.k <= 1) return;
+  mapDrag = { x: e.clientX, y: e.clientY };
+  mapDragged = false;
+  mapC.setPointerCapture(e.pointerId);
+  mapC.classList.add("panning");
+});
+mapC.addEventListener("pointerup", (e) => {
+  if (!mapDrag) return;
+  mapDrag = null;
+  mapC.classList.remove("panning");
+  if (mapC.hasPointerCapture?.(e.pointerId)) mapC.releasePointerCapture(e.pointerId);
+});
+
+// hover -> preview; click -> search that memory
 function mapHit(e) {
   const r = 16 * devicePixelRatio;
   const mx = e.offsetX * devicePixelRatio, my = e.offsetY * devicePixelRatio;
@@ -434,9 +550,20 @@ function mapHit(e) {
   }
   return best;
 }
-mapC.addEventListener("mousemove", (e) => {
-  const p = mapHit(e);
+mapC.addEventListener("pointermove", (e) => {
   const tip = $("map-tip");
+  if (mapDrag) {
+    tip.classList.add("hidden");
+    const dpr = devicePixelRatio;
+    const dx = (e.clientX - mapDrag.x) * dpr, dy = (e.clientY - mapDrag.y) * dpr;
+    if (Math.abs(dx) + Math.abs(dy) > 2) mapDragged = true;
+    mapView.tx += dx; mapView.ty += dy;
+    mapDrag = { x: e.clientX, y: e.clientY };
+    clampMapView();
+    drawMap();
+    return;
+  }
+  const p = mapHit(e);
   if (!p) { tip.classList.add("hidden"); return; }
   const inv = S.inventory.find((o) => o.object_id === p.object_id) || {};
   tip.querySelector("img").src = inv.thumb ? "data:image/jpeg;base64," + inv.thumb : "";
@@ -447,6 +574,7 @@ mapC.addEventListener("mousemove", (e) => {
 });
 mapC.addEventListener("mouseleave", () => $("map-tip").classList.add("hidden"));
 mapC.addEventListener("click", (e) => {
+  if (mapDragged) { mapDragged = false; return; } // a pan is not a click
   const p = mapHit(e);
   if (p) searchFor(p.label, p.object_id);
 });
@@ -489,21 +617,30 @@ function renderSearchResults() {
   document.body.classList.add("searching");  // collapses LATEST MEMORIES
   $("search-clear").classList.remove("hidden");
   const { hits, text, ms } = S.searchResults;
-  $("search-ms").textContent = `${hits.length} hit${hits.length === 1 ? "" : "s"} · ${fmtMs(ms || 0)} on-device`;
+  $("search-ms").innerHTML =
+    `${hits.length} hit${hits.length === 1 ? "" : "s"} · <b>${fmtMs(ms || 0)}</b> on-device`;
   if (!hits.length) {
     box.innerHTML = `<div class="result-none">no memory matches «${esc(text)}»</div>`;
     return;
   }
   const max = Math.max(...hits.map((hd) => hd.score), 0.01);
-  box.innerHTML = hits.map((hd) => `
+  box.innerHTML = hits.map((hd) => {
+    // the unit is the location: "last seen 4m ago · kitchen-unit" answers
+    // "where did I leave it?" as well as a laptop honestly can
+    const where = hd.local ? "this unit" : (hd.device || "fleet");
+    const seen = hd.last_seen
+      ? `<span class="seen">last seen ${relTime(hd.last_seen)} · ${esc(where)}</span>`
+      : esc(where);
+    return `
     <div class="result-row" data-id="${hd.object_id}">
       <img class="result-thumb" src="${hd.thumb ? "data:image/jpeg;base64," + hd.thumb : ""}" alt="">
       <div class="result-main">
         <div class="result-label">${esc(hd.label)} ${hd.similar ? '<span class="sim-tag">looks similar</span>' : ""}</div>
-        <div class="result-meta">${hd.views} vector${hd.views === 1 ? "" : "s"}${hd.sightings ? ` · seen ${hd.sightings}×` : ""}${hd.last_seen ? ` · last ${relTime(hd.last_seen)}` : ""} · ${hd.local ? "this unit" : "fleet"}</div>
+        <div class="result-meta">${hd.views} vector${hd.views === 1 ? "" : "s"}${hd.sightings ? ` · seen ${hd.sightings}×` : ""} · ${seen}</div>
       </div>
       <span class="result-score"><i style="width:${Math.round((hd.score / max) * 100)}%"></i></span>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   box.querySelectorAll(".result-row").forEach((el) => {
     el.onclick = () => {
       // open the memory drawer with every stored representation of this object
@@ -525,7 +662,7 @@ view.addEventListener("click", (e) => {
   const px = e.offsetX * devicePixelRatio, py = e.offsetY * devicePixelRatio;
   let best = null, bestArea = Infinity;
   for (const b of S.boxes) {
-    const [x1, y1, x2, y2] = b.box;
+    const [x1, y1, x2, y2] = disp.get(b.tid) || b.box; // hit-test what's drawn
     const x = m.x + x1 * m.w, y = m.y + y1 * m.h, w = (x2 - x1) * m.w, h = (y2 - y1) * m.h;
     if (px >= x && px <= x + w && py >= y && py <= y + h && w * h < bestArea) { best = b; bestArea = w * h; }
   }
@@ -618,7 +755,7 @@ function act(a, t) {
     const label = ($("teach-name") || {}).value?.trim();
     if (!label) return;
     send({ cmd: "teach", tid, epoch, label });
-    toast(`learning «${label}» — rotate it slowly`);
+    toast(`learning «${label}» · rotate it slowly`);
   } else if (a === "confirm") send({ cmd: "confirm", tid, epoch, object_id: t.object_id });
   else if (a === "reject") send({ cmd: "reject", tid, epoch, object_id: t.object_id });
   else if (a === "ignore") {
@@ -679,7 +816,7 @@ function renderUnknowns(force) {
   });
   let html = "";
   if (live.length) {
-    html += `<div class="section-head">in view — click to teach</div>`;
+    html += `<div class="section-head">in view · click to teach</div>`;
     html += live.map((b) => `
       <div class="unknown-item" data-tid="${b.tid}">
         <div class="inv-main">
@@ -690,7 +827,7 @@ function renderUnknowns(force) {
       </div>`).join("");
   }
   if (S.archived.size) {
-    html += `<div class="section-head">recently seen — left the frame, still teachable</div>`;
+    html += `<div class="section-head">recently seen · left the frame, still teachable</div>`;
     html += [...S.archived.values()].reverse().map((a) => `
       <div class="unknown-item archived" data-key="${a.tid}:${a.epoch}" style="cursor:default">
         <img class="unk-thumb zoomable" src="${a.thumb ? "data:image/jpeg;base64," + a.thumb : ""}" alt="" title="click to enlarge">
@@ -704,7 +841,7 @@ function renderUnknowns(force) {
         </div>
       </div>`).join("");
   }
-  body.innerHTML = html || `<p style="color:var(--faint);padding:8px">nothing unknown — show me something new</p>`;
+  body.innerHTML = html || `<p style="color:var(--faint);padding:8px">nothing unknown · show me something new</p>`;
 
   body.querySelectorAll(".unknown-item:not(.archived)").forEach((el) => {
     el.onclick = () => {
@@ -909,7 +1046,7 @@ function setFleet(on) {
     pill.className = "pill off local";
     $("fleet-label").textContent = "LOCAL ONLY";
     pill.dataset.tip = "Running fully on-device: detection, embeddings, and vector search " +
-      "all happen in this process — no server. Set QDRANT_URL in .env to link a shared " +
+      "all happen in this process, no server. Set QDRANT_URL in .env to link a shared " +
       "fleet memory in Qdrant Cloud, so every unit knows what any unit learned.";
   } else if (on) {
     pill.className = "pill on";

@@ -16,17 +16,18 @@ below and win over the plan text.
 earned, or the project state changes, update the relevant section here in the
 same working session — this file is the project's memory between sessions.
 
-## Current state (2026-07-01, end of day)
+## Current state (2026-07-02)
 
 All six PLAN.md §8 phases are built and green, plus five rounds of feedback
 from Dylan's live use. The app works end-to-end: `make run` →
 http://127.0.0.1:8765, live teach/recognize with picture-pill suggestions,
 hybrid search, curated push/pull against Dylan's Qdrant Cloud cluster
 (`.env`; the `fleet` collection is auto-created), 300k-memory scale stunt
-(S key, after `make demo-scale`). Local data + fleet collection were CLEARED
-2026-07-01 for a fresh start under the instance model. Not yet done: golden
-demo state (`make demo-save` after a real teaching session), README
-demo-script rehearsal, second-laptop test.
+(S key, after `make demo-scale`). 2026-07-02: video decoupled from detection
+(25 fps video / 8 Hz detect) and a UI pass (Edge band, map zoom, contrast).
+Not yet done: golden demo state (`make demo-save` after a real teaching
+session), README demo-script rehearsal, second-laptop test, and rehearsing
+the two approved demo beats (Wi-Fi kill + second unit, below).
 
 ## Layout
 
@@ -104,9 +105,28 @@ demo-script rehearsal, second-laptop test.
 - **"Memories" = exemplar VECTORS, not points** (Dylan): HUD/metrics/searched
   all report `store.vector_count()` (lazy recount after mutations; the scale
   shard contributes 3×count by construction). "Objects" = named instances.
-- **Live ingest is paced** (Dylan's M5 ran hot): frames are read at camera
-  rate but detection runs at TARGET_FPS=8 — unpaced, MPS sat at 100% duty
-  for ~13 fps nobody needed. Drive mode stays unpaced for tests.
+- **Live ingest is paced; video is decoupled** (Dylan, 2026-07-02: 8 fps
+  video too choppy; unpaced MPS ran the M5 hot): a grabber thread owns the
+  camera (set to 720p — 1080p drags the sensor to ~20 fps for nothing) and
+  streams JPEG at ≤30 fps; the detect thread runs YOLOE at TARGET_FPS=8 on
+  the latest frame and emits boxes-only messages; the client eases boxes
+  between ticks (~90 ms). Measured 25 fps video / 8 Hz detect; heat profile
+  unchanged. Drive mode keeps the synchronous single-thread path (boxes ride
+  frame messages) so tests stay deterministic.
+- **Demo script beats (Dylan, 2026-07-02)**: (1) kill Wi-Fi mid-demo —
+  everything keeps working, FLEET OFFLINE pill, reconnect syncs; (2) teach
+  on unit A, recognize on unit B (PLAN §4.5 — still unrehearsed). Rejected:
+  TTS voice, live fleet-feed ticker (demos rarely run concurrently),
+  leaderboards, glasses/robot hardware pivots.
+- **UI pass (Dylan, 2026-07-02: "not very pretty, low contrast")**: the
+  on-device search latency is the hero — an Edge band under the video (hero
+  µs figure + latency sparkline + memories/objects) absorbs the leftover
+  viewport height. Sans for prose, mono for telemetry; brighter contrast
+  tokens. Memory map is points-only (labels moved to hover) with wheel zoom
+  + drag pan, ⌂/double-click resets. Search results show last-seen time +
+  device name — the unit IS the location (no GPS on laptops; name a unit
+  after its place). Panel is "SEARCH", not "SEARCH THE MEMORY". Em dashes
+  swept from UI strings (Qdrant copy rule).
 - **Merge is same-kind only** (object+object or ignored+ignored) and
   preserves `kind` — a re-upsert without `kind`/`base_payload` silently
   corrupts points; every re-upsert call site must pass both.
@@ -144,6 +164,16 @@ demo-script rehearsal, second-laptop test.
   fastembed caches under the system temp dir. YOLOE on MPS, Unicom on CPU.
 - UI: never re-render a drawer per frame — it steals input focus and eats
   clicks. Gate re-renders on a content signature (see `renderUnknowns`).
+- **GIL vs the camera**: ultralytics' Python-side glue holds the GIL in
+  chunks; at the default 5 ms switch interval the grabber thread misses
+  frames (AVFoundation keeps only the latest) and video halves to ~15 fps.
+  `pipeline.py` sets `sys.setswitchinterval(0.002)` — measured 25 fps.
+  Related: pace gates must be slot accumulators, not `now` stamps — a
+  stamped 24 fps gate against a 29 fps camera beats down to every other
+  frame (~15 fps).
+- Headless UI screenshot without deps: `"/Applications/Google
+  Chrome.app/Contents/MacOS/Google Chrome" --headless=new --screenshot=…
+  --window-size=1512,900 --virtual-time-budget=9000 http://127.0.0.1:8765`.
 
 ## Working rules (repo-specific)
 
