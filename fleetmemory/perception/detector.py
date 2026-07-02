@@ -29,8 +29,10 @@ WEIGHTS = "yoloe-11l-seg-pf.pt"  # auto-downloads to repo root (gitignored)
 IMGSZ = 640
 MAX_DET = 64
 DEFAULT_CONF = 0.30  # spike used 0.25; expected to tune up on live webcam scenes
-# Normalized box-area band (spike values): drops speck noise and room-spanning blobs.
-MIN_AREA, MAX_AREA = 0.0008, 0.55
+# Normalized box-area band: drops speck noise and oversized phantom regions.
+# Spike used 0.55 max (room scenes); live desk demos propose empty quarter-screen
+# blobs, so the cap is tightened to hand-held scale (Dylan, 2026-07-01).
+MIN_AREA, MAX_AREA = 0.0008, 0.20
 
 
 def area_band_ok(box: tuple[float, float, float, float]) -> bool:

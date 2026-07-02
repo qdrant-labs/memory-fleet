@@ -165,9 +165,13 @@ class Store:
         t_created: float | None = None,
         t_sync: float | None = None,
         thumb: str = "",
+        base_payload: dict | None = None,
     ):
+        """base_payload: when re-upserting an existing point, pass its current
+        payload so auxiliary keys (sightings, t_seen, ...) survive the rewrite."""
         assert len(rows) == len(views), "exemplar rows and view metadata must stay row-aligned"
         payload = {
+            **(base_payload or {}),
             "kind": kind,
             "label": label,
             "device": device,
@@ -269,27 +273,79 @@ class Store:
                     break
         return out
 
-    # ---------- text search (BM25 over labels) ----------
+    # ---------- hybrid search (BM25 + substring, dense visual expansion) ----------
 
-    def search_text(self, text: str, limit: int = 10) -> list[Candidate]:
+    def get_rows(self, object_id: str) -> list[np.ndarray]:
+        """Exemplar rows for a point in either shard (mutable first)."""
+        for shard in [self.mutable] + ([self.immutable] if self.immutable else []):
+            recs = shard.retrieve([object_id], with_payload=False, with_vector=True)
+            if recs:
+                return [np.asarray(r, dtype=np.float32) for r in recs[0].vector["exemplars"]]
+        return []
+
+    def search_text(self, text: str, limit: int = 8) -> tuple[list[tuple[Candidate, bool]], float]:
+        """Hybrid label search. Lexical: BM25 sparse + substring (partial words).
+        Then dense expansion: the best hit's exemplars fan out over MAX_SIM to
+        surface visually similar memories (flagged similar=True). Returns
+        (results, engine_ms) — engine_ms is Edge query time only, the HUD number."""
+        text = text.strip()
+        if not text:
+            return [], 0.0
+        shards = [(self.mutable, True)] + (
+            [(self.immutable, False)] if self.immutable is not None else []
+        )
+        engine_ns = 0
+
         req = QueryRequest(
             query=Query.Nearest(self._bm25.embed_query(text), using="label"),
             limit=limit,
             with_payload=True,
             with_vector=False,
         )
-        hits = [(p, True) for p in self.mutable.query(req)]
-        if self.immutable is not None:
-            hits += [(p, False) for p in self.immutable.query(req)]
         best: dict[str, Candidate] = {}
-        for p, from_mut in hits:
-            pid = str(p.id)
-            if pid not in best or p.score > best[pid].score:
-                pl = p.payload or {}
-                best[pid] = Candidate(
-                    pid, float(p.score), pl.get("kind", "object"), pl.get("label", ""), pl, from_mut
-                )
-        return sorted(best.values(), key=lambda c: c.score, reverse=True)
+        t0 = time.perf_counter_ns()
+        for shard, from_mut in shards:
+            for p in shard.query(req):
+                pid = str(p.id)
+                if pid not in best or p.score > best[pid].score:
+                    pl = p.payload or {}
+                    best[pid] = Candidate(
+                        pid,
+                        float(p.score),
+                        pl.get("kind", "object"),
+                        pl.get("label", ""),
+                        pl,
+                        from_mut,
+                    )
+        engine_ns += time.perf_counter_ns() - t0
+
+        # substring pass so half-typed words ("watc") still land — payload scan,
+        # fine at demo scale, never runs against the synthetic stunt shard
+        needle = text.lower()
+        for pid, pl, from_mut in self.scroll_objects():
+            if pid not in best and needle in pl.get("label", "").lower():
+                best[pid] = Candidate(pid, 0.5, "object", pl.get("label", ""), pl, from_mut)
+
+        lexical = sorted(best.values(), key=lambda c: c.score, reverse=True)
+        results: list[tuple[Candidate, bool]] = [(c, False) for c in lexical]
+
+        if lexical:  # dense expansion from the strongest lexical hit
+            rows = self.get_rows(lexical[0].id)
+            if rows:
+                probe = np.mean(rows, axis=0)
+                probe /= np.linalg.norm(probe) or 1.0
+                t0 = time.perf_counter_ns()
+                rec = self.recognize(probe, limit=5)
+                engine_ns += time.perf_counter_ns() - t0
+                extra = 0
+                for cand in rec.candidates:
+                    if cand.id in best or cand.kind != "object" or cand.score < 0.45:
+                        continue
+                    results.append((cand, True))
+                    extra += 1
+                    if extra >= 3:
+                        break
+        return results[:limit], engine_ns / 1e6
 
     # ---------- scale stunt (PLAN.md §4 step 4) ----------
 

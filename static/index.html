@@ -66,11 +66,14 @@
 
       <section class="panel" id="map-panel">
         <div class="panel-title">MEMORY MAP <span class="title-side"><i class="dot local"></i> this unit <i class="dot fleet"></i> fleet</span></div>
-        <canvas id="map-canvas"></canvas>
+        <div id="map-wrap">
+          <canvas id="map-canvas"></canvas>
+          <div id="map-tip" class="hidden"><img alt=""><span></span></div>
+        </div>
       </section>
 
       <section class="panel" id="search-panel">
-        <div class="panel-title">SEARCH THE MEMORY <span class="title-side">BM25 · on-device</span></div>
+        <div class="panel-title">SEARCH THE MEMORY <span class="title-side" id="search-ms">hybrid · on-device</span></div>
         <div id="query-box">
           <span class="prompt">›</span>
           <input id="search" type="text" autocomplete="off" spellcheck="false"
@@ -79,9 +82,9 @@
         <div id="search-results"></div>
       </section>
 
-      <section class="panel" id="events-panel">
-        <div class="panel-title">EVENTS</div>
-        <div id="event-feed"></div>
+      <section class="panel" id="memories-panel">
+        <div class="panel-title">LATEST MEMORIES</div>
+        <div id="recent-memories"></div>
       </section>
     </aside>
   </main>

@@ -33,6 +33,8 @@ def main():
         if args.port is None:
             port += 1
     app = create_app(settings, drive_mode=args.drive)
+    print(f"\n  Fleet Memory · unit {settings.device_name}")
+    print(f"  → http://127.0.0.1:{port}\n", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 

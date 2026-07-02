@@ -231,6 +231,9 @@ class Core:
         self.recent_unknowns: dict[tuple[int, int], TrackState] = {}
         # session-scoped negatives for fleet (immutable) objects — not persisted (§3.5)
         self.session_negs: dict[str, list] = {}
+        # sighting stats: object_id -> (count, last_seen). Persisted on mutable
+        # objects at bind time; session-only for fleet-mirror objects.
+        self.sightings: dict[str, tuple[int, float]] = {}
         self._on_event = on_event or (lambda e: None)
         self._queue: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
@@ -335,6 +338,11 @@ class Core:
         changed = (state, obj) != (ts.state, ts.object_id)
         ts.state, ts.object_id, ts.label, ts.score = state, obj, label, d.score
 
+        if state == "recognized" and changed:
+            count, _ = self.sightings.get(obj, (0, 0.0))
+            self.sightings[obj] = (count + 1, m.t)
+            if d.candidate.from_mutable:
+                self.store.set_payload(obj, {"sightings": count + 1, "t_seen": m.t})
         if state == "recognized" and d.candidate.from_mutable:
             self._maybe_accrete(d.candidate.id, m, human=False)
         if changed or state == "recognized":
@@ -380,6 +388,7 @@ class Core:
             t_created=payload.get("t_created"),
             t_sync=payload.get("t_sync"),
             thumb=payload.get("thumb", ""),
+            base_payload=payload,
         )
         self._emit({"type": "object_updated", "object_id": object_id, "views": len(views)})
         return True
@@ -472,6 +481,7 @@ class Core:
                 t_created=payload.get("t_created"),
                 t_sync=payload.get("t_sync"),
                 thumb=payload.get("thumb", ""),
+                base_payload=payload,
             )
         else:  # fleet object: session-scoped only (§3.5 — re-teach beats persistence machinery)
             self.session_negs.setdefault(m.object_id, []).append(neg)
@@ -560,6 +570,7 @@ class Core:
             t_created=kp.get("t_created"),
             t_sync=kp.get("t_sync"),
             thumb=kp.get("thumb", "") or fp.get("thumb", ""),
+            base_payload=kp,
         )
         self.store.delete(m.fold_id)
         for tid, ts in self.tracks.items():
@@ -715,18 +726,34 @@ class Core:
     # ---------- sync worker handshakes (worker blocks on reply queues) ----------
 
     def _on_searchrequest(self, m: SearchRequest):
-        hits = self.store.search_text(m.text, limit=10) if m.text.strip() else []
-        self._emit(
-            {
-                "type": "search_results",
-                "text": m.text,
-                "hits": [
-                    {"object_id": c.id, "label": c.label, "score": round(c.score, 3)}
-                    for c in hits
-                    if c.kind == "object" and not c.payload.get("synthetic")
-                ],
-            }
-        )
+        results, ms = self.store.search_text(m.text)
+        hits = []
+        for c, similar in results:
+            if c.kind != "object" or c.payload.get("synthetic"):
+                continue
+            hits.append(
+                {
+                    "object_id": c.id,
+                    "score": round(c.score, 3),
+                    "similar": similar,
+                    **self._object_meta(c.id, c.payload, c.from_mutable),
+                }
+            )
+        self._emit({"type": "search_results", "text": m.text, "ms": round(ms, 2), "hits": hits})
+
+    def _object_meta(self, object_id: str, pl: dict, local: bool) -> dict:
+        count, last = self.sightings.get(object_id, (0, 0.0))
+        return {
+            "object_id": object_id,
+            "label": pl.get("label", ""),
+            "views": len(pl.get("views") or []),
+            "thumb": pl.get("thumb", ""),
+            "device": pl.get("device", ""),
+            "local": local,
+            "sightings": count or pl.get("sightings", 0),
+            "last_seen": last or pl.get("t_seen", 0.0),
+            "created": pl.get("t_created", 0.0),
+        }
 
     def _on_maprequest(self, m: MapRequest):
         objs = self.store.object_mean_vectors()
@@ -838,12 +865,8 @@ class Core:
             ):
                 items.append(
                     {
-                        "object_id": pid,
-                        "label": pl.get("label", ""),
-                        "views": pl.get("views") or [],
-                        "thumb": pl.get("thumb", ""),
-                        "device": pl.get("device", ""),
-                        "local": from_mut,
+                        **self._object_meta(pid, pl, from_mut),
+                        "views": pl.get("views") or [],  # full row-aligned meta for curation
                         "pushed": bool(pl.get("t_sync")),
                         "ignored": kind == "ignored",
                     }

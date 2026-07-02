@@ -34,7 +34,7 @@ ws.onmessage = (e) => {
   const h = handlers[m.type];
   if (h) h(m);
 };
-ws.onclose = () => { addEvent("warn", "connection lost — reload the page"); toast("connection lost — reload"); };
+ws.onclose = () => toast("connection lost — reload");
 
 const handlers = {
   hello(m) {
@@ -46,7 +46,6 @@ const handlers = {
     initSliders(m.thresholds, m.detector_conf);
     send({ cmd: "inventory" });
     send({ cmd: "map" });
-    addEvent("ok", `unit online · ${m.memories.toLocaleString()} memories on device`);
   },
   frame(m) {
     const img = new Image();
@@ -80,7 +79,6 @@ const handlers = {
     S.tracks.set(m.tid, m);
     if (m.state !== "capturing") S.bursts.delete(m.tid);
     if (m.state === "recognized" && (!prev || prev.object_id !== m.object_id)) {
-      addEvent("ok", `recognized <b>${esc(m.label)}</b> · ${m.score.toFixed(2)}`);
       pulseMapNode(m.object_id);
     }
     if (S.pop && S.pop.tid === m.tid && m.state === "recognized") hidePop();
@@ -90,14 +88,13 @@ const handlers = {
   stats(m) { S.memories = m.memories; setFleet(m.fleet); bumpCounts(); },
   camera(m) { setCamera(m.on); },
   object_created(m) {
-    addEvent("teach", `taught <b>${esc(m.label)}</b> — it will remember`);
-    toast(`taught «${m.label}»`);
+    toast(`taught «${m.label}» — it will remember`);
     memPulse();
     refreshData();
   },
   object_updated(m) { if (m.views) memPulse(); refreshData(); },
-  object_deleted() { addEvent("warn", "memory forgotten"); refreshData(); },
-  objects_merged() { addEvent("teach", "two memories merged into one"); refreshData(); },
+  object_deleted() { refreshData(); },
+  objects_merged() { toast("two memories merged into one"); refreshData(); },
   rename_conflict(m) {
     if (confirm(`«${m.label}» already exists — merge into it?`))
       send({ cmd: "merge", keep_id: m.existing_id, fold_id: m.object_id });
@@ -115,19 +112,19 @@ const handlers = {
   inventory(m) {
     S.inventory = m.items;
     bumpCounts();
+    renderMemories();
     if (S.drawerMode === "inventory") renderInventory();
   },
   thresholds() {},
   pull_applied(m) {
-    addEvent("fleet", `fleet pull applied${m.deduped ? ` · ${m.deduped} local deduped` : ""}`);
+    toast(`fleet pull applied${m.deduped ? ` · ${m.deduped} local deduped` : ""}`);
     refreshData();
   },
   push_done(m) {
-    addEvent("fleet", m.count ? `<b>${m.count}</b> pushed — every unit now knows` : "nothing to push");
-    toast(m.count ? `${m.count} pushed to the fleet` : "nothing to push");
+    toast(m.count ? `${m.count} pushed — every unit now knows` : "nothing to push");
     refreshData();
   },
-  fleet_error(m) { addEvent("warn", `fleet: ${esc(m.message)}`); },
+  fleet_error(m) { toast(`fleet: ${m.message}`); },
   search_results(m) {
     S.searchResults = m;
     S.searchHits = m.text ? new Set(m.hits.map((h) => h.object_id)) : null;
@@ -139,11 +136,9 @@ const handlers = {
   scale(m) {
     S.scaleOn = m.on;
     $("scale-banner").classList.toggle("hidden", !m.on);
-    addEvent(m.on ? "fleet" : "warn", m.on
-      ? "⚡ 100k synthetic memories attached — watch the latency"
-      : "stunt shard detached");
+    toast(m.on ? "⚡ 100k memories attached — watch the latency" : "stunt shard detached");
   },
-  error(m) { toast(m.message); addEvent("warn", esc(m.message)); },
+  error(m) { toast(m.message); },
 };
 
 function refreshData() { send({ cmd: "inventory" }); send({ cmd: "map" }); }
@@ -283,15 +278,42 @@ function drawSpark() {
 
 function fmtMs(ms) { return ms < 1 ? `${Math.round(ms * 1000)} µs` : `${ms.toFixed(1)} ms`; }
 
-// ---------- events feed ----------
-function addEvent(cls, html) {
-  const el = document.createElement("div");
-  el.className = `ev ${cls}`;
-  const t = new Date();
-  el.innerHTML = `<time>${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}:${String(t.getSeconds()).padStart(2, "0")}</time>${html}`;
-  const feed = $("event-feed");
-  feed.prepend(el);
-  while (feed.children.length > 60) feed.lastChild.remove();
+// ---------- latest memories ----------
+function relTime(t) {
+  if (!t) return "";
+  const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function renderMemories() {
+  const box = $("recent-memories");
+  const objs = S.inventory.filter((o) => !o.ignored && o.created)
+    .sort((a, b) => b.created - a.created).slice(0, 12);
+  if (!objs.length) {
+    box.innerHTML = `<div class="mem-none">nothing remembered yet — teach me something</div>`;
+    return;
+  }
+  box.innerHTML = objs.map((o) => `
+    <div class="mem-row" data-id="${o.object_id}" data-label="${esc(o.label)}">
+      <img class="mem-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">
+      <div class="mem-main">
+        <div class="mem-label">${esc(o.label)}</div>
+        <div class="mem-meta">${o.views.length} vector${o.views.length === 1 ? "" : "s"}
+          · learned ${relTime(o.created)}${o.sightings ? ` · seen ${o.sightings}×` : ""}${o.local ? "" : " · fleet"}</div>
+      </div>
+    </div>`).join("");
+  box.querySelectorAll(".mem-row").forEach((el) => {
+    el.onclick = () => searchFor(el.dataset.label, el.dataset.id);
+  });
+}
+
+function searchFor(label, oid) {
+  $("search").value = label;
+  send({ cmd: "search", text: label });
+  if (oid) pulseMapNode(oid);
 }
 
 // ---------- memory flow particle ----------
@@ -325,26 +347,18 @@ function pulseMapNode(oid) {
   mapPulses.set(oid, performance.now());
   drawMap();
 }
+function mapPts() {
+  const w = mapC.width, h = mapC.height, pad = 22 * devicePixelRatio;
+  return S.mapPoints.map((p) => ({
+    ...p, px: pad + p.x * (w - pad * 2), py: pad + p.y * (h - pad * 2),
+  }));
+}
+
 function drawMap() {
   const w = mapC.width, h = mapC.height;
   if (!w) return;
-  const pad = 22 * devicePixelRatio;
   mctx.clearRect(0, 0, w, h);
-  const pts = S.mapPoints.map((p) => ({
-    ...p, px: pad + p.x * (w - pad * 2), py: pad + p.y * (h - pad * 2),
-  }));
-  // constellation edges: each node to its nearest neighbor (decorative)
-  mctx.strokeStyle = "rgba(138, 164, 255, .16)";
-  mctx.lineWidth = devicePixelRatio;
-  for (const p of pts) {
-    let best = null, bd = Infinity;
-    for (const q of pts) {
-      if (q === p) continue;
-      const d = (p.px - q.px) ** 2 + (p.py - q.py) ** 2;
-      if (d < bd) { bd = d; best = q; }
-    }
-    if (best) { mctx.beginPath(); mctx.moveTo(p.px, p.py); mctx.lineTo(best.px, best.py); mctx.stroke(); }
-  }
+  const pts = mapPts();
   const now = performance.now();
   let livePulse = false;
   mctx.font = `${9.5 * devicePixelRatio}px "JetBrains Mono", ui-monospace, monospace`;
@@ -379,6 +393,34 @@ function drawMap() {
   if (livePulse) requestAnimationFrame(drawMap);
 }
 
+// map hover -> preview; click -> search that memory
+function mapHit(e) {
+  const r = 16 * devicePixelRatio;
+  const mx = e.offsetX * devicePixelRatio, my = e.offsetY * devicePixelRatio;
+  let best = null, bd = r * r;
+  for (const p of mapPts()) {
+    const d = (p.px - mx) ** 2 + (p.py - my) ** 2;
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+mapC.addEventListener("mousemove", (e) => {
+  const p = mapHit(e);
+  const tip = $("map-tip");
+  if (!p) { tip.classList.add("hidden"); return; }
+  const inv = S.inventory.find((o) => o.object_id === p.object_id) || {};
+  tip.querySelector("img").src = inv.thumb ? "data:image/jpeg;base64," + inv.thumb : "";
+  tip.querySelector("span").textContent = p.label;
+  tip.style.left = Math.min(e.offsetX + 12, mapC.clientWidth - 150) + "px";
+  tip.style.top = Math.max(e.offsetY - 46, 4) + "px";
+  tip.classList.remove("hidden");
+});
+mapC.addEventListener("mouseleave", () => $("map-tip").classList.add("hidden"));
+mapC.addEventListener("click", (e) => {
+  const p = mapHit(e);
+  if (p) searchFor(p.label, p.object_id);
+});
+
 // ---------- search ----------
 let searchTimer = null;
 $("search").oninput = () => {
@@ -397,21 +439,27 @@ $("search").oninput = () => {
 
 function renderSearchResults() {
   const box = $("search-results");
-  if (!S.searchResults || !S.searchResults.text) { box.innerHTML = ""; return; }
-  const { hits, text } = S.searchResults;
+  if (!S.searchResults || !S.searchResults.text) {
+    box.innerHTML = "";
+    $("search-ms").textContent = "hybrid · on-device";
+    return;
+  }
+  const { hits, text, ms } = S.searchResults;
+  $("search-ms").textContent = `${hits.length} hit${hits.length === 1 ? "" : "s"} · ${fmtMs(ms || 0)} on-device`;
   if (!hits.length) {
     box.innerHTML = `<div class="result-none">no memory matches «${esc(text)}»</div>`;
     return;
   }
-  const max = hits[0].score || 1;
-  box.innerHTML = hits.map((hd) => {
-    const inv = S.inventory.find((o) => o.object_id === hd.object_id) || {};
-    return `<div class="result-row" data-id="${hd.object_id}">
-      <img class="result-thumb" src="${inv.thumb ? "data:image/jpeg;base64," + inv.thumb : ""}" alt="">
-      <span class="result-label">${esc(hd.label)}</span>
+  const max = Math.max(...hits.map((hd) => hd.score), 0.01);
+  box.innerHTML = hits.map((hd) => `
+    <div class="result-row" data-id="${hd.object_id}">
+      <img class="result-thumb" src="${hd.thumb ? "data:image/jpeg;base64," + hd.thumb : ""}" alt="">
+      <div class="result-main">
+        <div class="result-label">${esc(hd.label)} ${hd.similar ? '<span class="sim-tag">looks similar</span>' : ""}</div>
+        <div class="result-meta">${hd.views} vector${hd.views === 1 ? "" : "s"}${hd.sightings ? ` · seen ${hd.sightings}×` : ""}${hd.last_seen ? ` · last ${relTime(hd.last_seen)}` : ""} · ${hd.local ? "this unit" : "fleet"}</div>
+      </div>
       <span class="result-score"><i style="width:${Math.round((hd.score / max) * 100)}%"></i></span>
-    </div>`;
-  }).join("");
+    </div>`).join("");
   box.querySelectorAll(".result-row").forEach((el) => {
     el.onclick = () => { pulseMapNode(el.dataset.id); openDrawer("inventory"); };
   });
@@ -496,7 +544,7 @@ function openDrawer(mode) {
   $("drawer-title").textContent = mode === "inventory" ? "memory · curation" : "unknowns";
   $("drawer").classList.remove("hidden");
   $("drawer-foot").classList.toggle("hidden", mode !== "inventory");
-  mode === "unknowns" ? renderUnknowns() : renderInventory();
+  mode === "unknowns" ? renderUnknowns(true) : renderInventory();
 }
 function closeDrawer() { S.drawerMode = null; $("drawer").classList.add("hidden"); }
 
@@ -510,9 +558,15 @@ function renderUnknownCount() {
   $("unknown-count").textContent = liveUnknowns().length + S.archived.size;
 }
 
-function renderUnknowns() {
+let unkSig = "";
+function renderUnknowns(force) {
   const body = $("drawer-body");
   const live = liveUnknowns();
+  // re-render only when the SET changes — a per-frame rebuild stole input
+  // focus mid-word and ate clicks on freshly-replaced buttons
+  const sig = live.map((b) => b.tid).join(",") + "|" + [...S.archived.keys()].join(",");
+  if (!force && sig === unkSig) return;
+  unkSig = sig;
   let html = "";
   if (live.length) {
     html += `<div class="section-head">in view — click to teach</div>`;

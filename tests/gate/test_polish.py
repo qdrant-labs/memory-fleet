@@ -5,7 +5,12 @@ import uuid
 import numpy as np
 from qdrant_edge import EdgeShard, Point, UpdateOperation
 
-from fleetmemory.memory.core import MapRequest, ScaleStunt, SearchRequest, Teach
+from fleetmemory.memory.core import (
+    MapRequest,
+    ScaleStunt,
+    SearchRequest,
+    Teach,
+)
 from fleetmemory.memory.store import shard_config
 
 
@@ -20,8 +25,36 @@ def test_search_finds_by_label_words(h):
     h.send(SearchRequest(text="coffee"))
     ev = h.last("search_results")
     assert [x["label"] for x in ev["hits"]] == ["red coffee mug"]
+    assert ev["ms"] >= 0  # on-device engine latency is part of the show
+    assert ev["hits"][0]["views"] >= 1 and "last_seen" in ev["hits"][0]
     h.send(SearchRequest(text=""))
     assert h.last("search_results")["hits"] == []
+
+
+def test_search_is_hybrid(h):
+    teach(h, 1, "mug", "red coffee mug")
+    h.ingest(2, h.geo.view("mug", 0.7))  # a second, visually-similar object
+    h.send(Teach(tid=2, epoch=1, label="thermos"))
+    # partial word: the substring pass catches what BM25 tokenization misses
+    h.send(SearchRequest(text="coff"))
+    ev = h.last("search_results")
+    assert "red coffee mug" in [x["label"] for x in ev["hits"]]
+    # dense expansion: searching the mug also surfaces the look-alike, flagged
+    h.send(SearchRequest(text="coffee"))
+    ev = h.last("search_results")
+    by_label = {x["label"]: x for x in ev["hits"]}
+    assert not by_label["red coffee mug"]["similar"]
+    assert "thermos" in by_label and by_label["thermos"]["similar"]
+
+
+def test_sightings_stamped_on_recognition(h):
+    teach(h, 1, "mug", "red coffee mug")
+    h.ingest(5, h.geo.view("mug", 0.9))  # a new track binds -> one sighting
+    h.send(SearchRequest(text="coffee"))
+    hit = h.last("search_results")["hits"][0]
+    assert hit["sightings"] >= 1 and hit["last_seen"] > 0
+    oid = hit["object_id"]
+    assert h.store.get_object(oid, with_vectors=False)[0]["sightings"] >= 1  # persisted
 
 
 def test_map_projects_all_real_objects(h):
