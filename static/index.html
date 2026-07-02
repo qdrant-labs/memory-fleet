@@ -3,77 +3,143 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fleet Memory</title>
+<title>Fleet Memory · Qdrant Edge</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header id="topbar">
-  <div class="brand">
-    <span class="brand-mark">◆</span>
-    <span class="brand-name">FLEET MEMORY</span>
-    <span class="brand-sub">shared object memory on Qdrant Edge</span>
-  </div>
-  <div class="top-status">
-    <span id="device-name" class="unit-chip">unit</span>
-    <span id="fleet-dot" class="fleet-dot off" title="fleet offline"></span>
-    <span id="fleet-label" class="fleet-label">fleet offline</span>
-    <button id="btn-pull" class="top-btn hidden" title="pull fleet memory now">⇣ pull</button>
-    <input id="search" type="search" placeholder="search memory…" autocomplete="off">
-    <button id="btn-unknowns" class="top-btn">? <b id="unknown-count">0</b></button>
-    <button id="btn-inventory" class="top-btn">inventory</button>
-    <button id="btn-map" class="top-btn">map</button>
-    <button id="btn-settings" class="top-btn">⚙</button>
-  </div>
-</header>
-
-<main id="stage">
-  <canvas id="view"></canvas>
-  <div id="no-feed">waiting for video…</div>
-
-  <div id="hud">
-    <div class="hud-block">
-      <div class="hud-big"><span id="hud-ms">–</span></div>
-      <div class="hud-cap">last recognition query</div>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">
+      <img class="brand-img" src="/static/brand/qdrant-brandmark-white.svg" alt="Qdrant">
+      <span class="brand-name">QDRANT <b>EDGE</b></span>
+      <span class="brand-sep">·</span>
+      <span class="brand-sub">Fleet Memory</span>
     </div>
-    <canvas id="spark" width="220" height="44"></canvas>
-    <div class="hud-block">
-      <div class="hud-big dim"><span id="hud-count">0</span></div>
-      <div class="hud-cap">memories searched</div>
+    <div class="top-status">
+      <span class="unit-tag"><span id="unit-dot" class="unit-dot"></span><span id="device-name">unit</span></span>
+      <span id="fleet-tag" class="unit-tag dim"><span id="fleet-dot" class="unit-dot off"></span><span id="fleet-label">fleet offline</span></span>
+      <button id="btn-pull" class="top-btn hidden">⇣ PULL</button>
+      <button id="btn-camera" class="top-btn">⏻ CAMERA</button>
+      <button id="btn-unknowns" class="top-btn">? UNKNOWNS <b id="unknown-count">0</b></button>
+      <button id="btn-inventory" class="top-btn">▤ MEMORY</button>
+      <button id="btn-tuning" class="top-btn">⚙ TUNING</button>
     </div>
-  </div>
+  </header>
 
-  <div id="popover" class="hidden"></div>
-  <div id="map-panel" class="hidden">
-    <div id="map-head">memory map <button id="map-close">×</button></div>
-    <canvas id="map-canvas" width="420" height="340"></canvas>
-  </div>
-  <div id="scale-banner" class="hidden">⚡ 100k-memory stunt shard active — press S to detach</div>
-</main>
+  <main id="grid">
+    <section id="feed-panel" class="panel">
+      <div class="panel-title">LIVE FEED
+        <span id="clock" class="title-side">T+00:00</span>
+      </div>
+      <div id="feed-wrap">
+        <canvas id="view"></canvas>
+        <div class="hud-corner tl"></div><div class="hud-corner tr"></div>
+        <div class="hud-corner bl"></div><div class="hud-corner br"></div>
+        <div id="rec"><span class="rec-dot"></span>LIVE</div>
+        <div id="no-feed">standing by — camera off</div>
+        <div id="pipeline-ticker">
+          <span class="tick-label">LOOP</span>
+          <span class="tick-step">detect <b id="t-detect">—</b></span><span class="tick-arrow">→</span>
+          <span class="tick-step">embed <b id="t-embed">—</b></span><span class="tick-arrow">→</span>
+          <span class="tick-step">search <b id="t-query">—</b></span><span class="tick-arrow">→</span>
+          <span class="tick-step">memories <b id="t-count">0</b></span>
+          <span class="tick-step right"><b id="t-fps">—</b> fps</span>
+        </div>
+        <div id="popover" class="hidden"></div>
+      </div>
+    </section>
+
+    <aside id="rail">
+      <section class="panel" id="latency-panel">
+        <div class="panel-title">RECOGNITION QUERY <span class="title-side">on-device · MAX_SIM</span></div>
+        <div id="latency-row">
+          <div id="latency-big"><span id="hud-ms">—</span></div>
+          <canvas id="spark" width="240" height="52"></canvas>
+        </div>
+        <div class="metrics-row">
+          <div class="metric"><div class="metric-value" id="m-memories">0</div><div class="metric-label">Memories</div></div>
+          <div class="metric"><div class="metric-value" id="m-objects">0</div><div class="metric-label">Objects</div></div>
+          <div class="metric"><div class="metric-value" id="m-detect">—</div><div class="metric-label">Detect ms</div></div>
+          <div class="metric"><div class="metric-value" id="m-embed">—</div><div class="metric-label">Embed ms</div></div>
+        </div>
+      </section>
+
+      <section class="panel" id="map-panel">
+        <div class="panel-title">MEMORY MAP <span class="title-side"><i class="dot local"></i> this unit <i class="dot fleet"></i> fleet</span></div>
+        <canvas id="map-canvas"></canvas>
+      </section>
+
+      <section class="panel" id="search-panel">
+        <div class="panel-title">SEARCH THE MEMORY <span class="title-side">BM25 · on-device</span></div>
+        <div id="query-box">
+          <span class="prompt">›</span>
+          <input id="search" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="everything any unit ever learned…">
+        </div>
+        <div id="search-results"></div>
+      </section>
+
+      <section class="panel" id="events-panel">
+        <div class="panel-title">EVENTS</div>
+        <div id="event-feed"></div>
+      </section>
+    </aside>
+  </main>
+</div>
 
 <aside id="drawer" class="hidden">
-  <div id="drawer-head">
-    <span id="drawer-title">unknowns</span>
-    <button id="drawer-close">×</button>
-  </div>
+  <div class="drawer-head"><span id="drawer-title">unknowns</span><button id="drawer-close">×</button></div>
   <div id="drawer-body"></div>
   <div id="drawer-foot" class="hidden">
     <button id="btn-merge" class="mini-btn" disabled>merge 2 selected</button>
-    <button id="btn-push" class="pop-btn" disabled>⛟ push to fleet</button>
+    <button id="btn-push" class="push-btn" disabled>⛟ PUSH TO FLEET</button>
   </div>
 </aside>
 
-<aside id="settings" class="hidden">
-  <div id="drawer-head"><span>tuning</span><button id="settings-close">×</button></div>
-  <div class="setting"><label>recognize ≥ <b id="v-same"></b></label>
-    <input type="range" id="s-same" min="0.5" max="0.99" step="0.01"></div>
-  <div class="setting"><label>suggest ≥ <b id="v-suggest"></b></label>
-    <input type="range" id="s-suggest" min="0.3" max="0.9" step="0.01"></div>
-  <div class="setting"><label>suppress ≥ <b id="v-ignore"></b></label>
-    <input type="range" id="s-ignore" min="0.6" max="0.99" step="0.01"></div>
-  <div class="setting"><label>detector conf <b id="v-conf"></b></label>
-    <input type="range" id="s-conf" min="0.1" max="0.7" step="0.01"></div>
+<aside id="tuning" class="hidden">
+  <div class="drawer-head"><span>TUNING</span><button id="tuning-close">×</button></div>
+  <div class="tuning-body">
+    <p class="tune-intro">Every box is decided by one vector search against memory.
+    These sliders move the decision lines.</p>
+
+    <div class="setting">
+      <label>DETECTOR SENSITIVITY <b id="v-conf"></b></label>
+      <input type="range" id="s-conf" min="0.1" max="0.7" step="0.01">
+      <p class="tune-hint">How easily the camera proposes a region at all.
+      Lower&nbsp;= more boxes (and more noise); higher&nbsp;= only confident shapes.</p>
+    </div>
+
+    <div class="setting">
+      <label>RECOGNIZE ABOVE <b id="v-same"></b></label>
+      <input type="range" id="s-same" min="0.5" max="0.99" step="0.01">
+      <p class="tune-hint">Similarity needed to name an object on its own.
+      Lower&nbsp;= bolder (risks wrong names); higher&nbsp;= stricter (asks more often).</p>
+    </div>
+
+    <div class="setting">
+      <label>SUGGEST ABOVE <b id="v-suggest"></b></label>
+      <input type="range" id="s-suggest" min="0.3" max="0.9" step="0.01">
+      <p class="tune-hint">Below "recognize" but above this, it asks:
+      “looks like&nbsp;X — same?” Below this it stays unknown.</p>
+    </div>
+
+    <div class="setting">
+      <label>SUPPRESS ABOVE <b id="v-ignore"></b></label>
+      <input type="range" id="s-ignore" min="0.6" max="0.99" step="0.01">
+      <p class="tune-hint">How closely something must match a blocklisted look
+      before it's hidden. Kept strict so real objects are never silently eaten.</p>
+    </div>
+
+    <div id="tier-band">
+      <div class="band unknown">unknown</div>
+      <div class="band suggest">ask</div>
+      <div class="band same">recognize</div>
+    </div>
+    <p class="tune-hint center">the similarity scale, 0 → 1</p>
+  </div>
 </aside>
 
+<div id="scale-banner" class="hidden">⚡ 100,000 synthetic memories loaded — a year of robot life. Press S to detach.</div>
 <div id="toasts"></div>
 <script src="/static/app.js"></script>
 </body>

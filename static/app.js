@@ -1,4 +1,4 @@
-/* Fleet Memory UI — vanilla JS, one WebSocket, canvas overlay. */
+/* Fleet Memory — Qdrant Edge showcase UI. Vanilla JS, one WebSocket. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -7,22 +7,25 @@ const send = (m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
 
 // ---------- state ----------
 const S = {
-  tracks: new Map(),   // tid -> {state, label, object_id, score, epoch}
-  boxes: [],           // latest frame's boxes
-  bursts: new Map(),   // tid -> {have, want}
-  frame: null,         // Image
-  frameW: 0, frameH: 0,
-  latencies: [],       // rolling query ms
+  tracks: new Map(),     // tid -> {state, label, object_id, score, epoch}
+  boxes: [],
+  bursts: new Map(),
+  frame: null,
+  latencies: [],
   memories: 0,
   inventory: [],
-  drawerMode: null,    // "unknowns" | "inventory" | null
-  pop: null,           // popover context {tid, epoch, kind}
-  selected: new Set(), // curation: object ids checked for push/merge
-  expanded: null,      // curation: object id with views row open
+  archived: new Map(),   // "tid:epoch" -> {tid, epoch, thumb, t}
+  drawerMode: null,
+  pop: null,
+  selected: new Set(),
+  expanded: null,
   fleetOn: false,
-  searchHits: null,    // Set of object ids matching the search box (null = no search)
+  cameraOn: true,
+  searchHits: null,
+  searchResults: null,
   mapPoints: [],
   scaleOn: false,
+  t0: Date.now(),
 };
 
 // ---------- websocket ----------
@@ -31,58 +34,104 @@ ws.onmessage = (e) => {
   const h = handlers[m.type];
   if (h) h(m);
 };
-ws.onclose = () => toast("connection lost — reload");
+ws.onclose = () => { addEvent("warn", "connection lost — reload the page"); toast("connection lost — reload"); };
 
 const handlers = {
   hello(m) {
-    $("device-name").textContent = m.device || "unit";
+    $("device-name").textContent = (m.device || "unit").toUpperCase();
     setFleet(m.fleet);
+    setCamera(m.camera !== false);
     S.memories = m.memories;
+    bumpCounts();
     initSliders(m.thresholds, m.detector_conf);
+    send({ cmd: "inventory" });
+    send({ cmd: "map" });
+    addEvent("ok", `unit online · ${m.memories.toLocaleString()} memories on device`);
   },
   frame(m) {
     const img = new Image();
     img.onload = () => { S.frame = img; draw(); };
     img.src = "data:image/jpeg;base64," + m.jpg;
     S.boxes = m.boxes;
+    $("t-detect").textContent = m.detect_ms + " ms";
     for (const b of m.boxes) {
       const t = S.tracks.get(b.tid);
-      if (t && t.epoch !== b.epoch) S.tracks.delete(b.tid); // stale binding
+      if (t && t.epoch !== b.epoch) S.tracks.delete(b.tid);
     }
+    renderUnknownCount();
     if (S.drawerMode === "unknowns") renderUnknowns();
+  },
+  perf(m) {
+    $("t-fps").textContent = m.fps.toFixed(1);
+    $("m-detect").textContent = m.detect_ms;
+    if (m.embed_ms) $("m-embed").textContent = m.embed_ms.toFixed(1);
   },
   query(m) {
     S.latencies.push(m.ms);
-    if (S.latencies.length > 120) S.latencies.shift();
+    if (S.latencies.length > 140) S.latencies.shift();
     S.memories = m.searched;
     $("hud-ms").textContent = fmtMs(m.ms);
-    $("hud-count").textContent = S.memories.toLocaleString();
+    $("t-query").textContent = fmtMs(m.ms);
+    bumpCounts();
     drawSpark();
   },
   track_update(m) {
+    const prev = S.tracks.get(m.tid);
     S.tracks.set(m.tid, m);
     if (m.state !== "capturing") S.bursts.delete(m.tid);
+    if (m.state === "recognized" && (!prev || prev.object_id !== m.object_id)) {
+      addEvent("ok", `recognized <b>${esc(m.label)}</b> · ${m.score.toFixed(2)}`);
+      pulseMapNode(m.object_id);
+    }
     if (S.pop && S.pop.tid === m.tid && m.state === "recognized") hidePop();
     if (S.drawerMode === "unknowns") renderUnknowns();
   },
   burst_progress(m) { S.bursts.set(m.tid, m); },
-  stats(m) { S.memories = m.memories; setFleet(m.fleet); },
-  object_created(m) { toast(`taught «${m.label}»`); refreshInv(); },
-  object_updated() { refreshInv(); },
-  object_deleted() { toast("forgotten"); refreshInv(); },
-  objects_merged() { toast("merged"); refreshInv(); },
+  stats(m) { S.memories = m.memories; setFleet(m.fleet); bumpCounts(); },
+  camera(m) { setCamera(m.on); },
+  object_created(m) {
+    addEvent("teach", `taught <b>${esc(m.label)}</b> — it will remember`);
+    toast(`taught «${m.label}»`);
+    memPulse();
+    refreshData();
+  },
+  object_updated(m) { if (m.views) memPulse(); refreshData(); },
+  object_deleted() { addEvent("warn", "memory forgotten"); refreshData(); },
+  objects_merged() { addEvent("teach", "two memories merged into one"); refreshData(); },
   rename_conflict(m) {
     if (confirm(`«${m.label}» already exists — merge into it?`))
       send({ cmd: "merge", keep_id: m.existing_id, fold_id: m.object_id });
   },
-  push_done(m) { toast(m.count ? `${m.count} pushed — the fleet knows` : "nothing to push"); refreshInv(); },
-  fleet_error(m) { toast(`fleet: ${m.message}`); },
-  inventory(m) { S.inventory = m.items; if (S.drawerMode === "inventory") renderInventory(); },
+  unknown_archived(m) {
+    S.archived.set(`${m.tid}:${m.epoch}`, m);
+    renderUnknownCount();
+    if (S.drawerMode === "unknowns") renderUnknowns();
+  },
+  unknown_removed(m) {
+    S.archived.delete(`${m.tid}:${m.epoch}`);
+    renderUnknownCount();
+    if (S.drawerMode === "unknowns") renderUnknowns();
+  },
+  inventory(m) {
+    S.inventory = m.items;
+    bumpCounts();
+    if (S.drawerMode === "inventory") renderInventory();
+  },
   thresholds() {},
-  pull_applied(m) { toast(`fleet pull applied (${m.deduped} deduped)`); refreshInv(); },
+  pull_applied(m) {
+    addEvent("fleet", `fleet pull applied${m.deduped ? ` · ${m.deduped} local deduped` : ""}`);
+    refreshData();
+  },
+  push_done(m) {
+    addEvent("fleet", m.count ? `<b>${m.count}</b> pushed — every unit now knows` : "nothing to push");
+    toast(m.count ? `${m.count} pushed to the fleet` : "nothing to push");
+    refreshData();
+  },
+  fleet_error(m) { addEvent("warn", `fleet: ${esc(m.message)}`); },
   search_results(m) {
-    S.searchHits = new Set(m.hits.map((h) => h.object_id));
-    if (m.text && !m.hits.length) toast(`no memory matches «${m.text}»`);
+    S.searchResults = m;
+    S.searchHits = m.text ? new Set(m.hits.map((h) => h.object_id)) : null;
+    renderSearchResults();
     if (S.drawerMode === "inventory") renderInventory();
     drawMap();
   },
@@ -90,94 +139,119 @@ const handlers = {
   scale(m) {
     S.scaleOn = m.on;
     $("scale-banner").classList.toggle("hidden", !m.on);
-    toast(m.on ? "a year of robot memories loaded" : "stunt shard detached");
+    addEvent(m.on ? "fleet" : "warn", m.on
+      ? "⚡ 100k synthetic memories attached — watch the latency"
+      : "stunt shard detached");
   },
-  error(m) { toast(m.message); },
+  error(m) { toast(m.message); addEvent("warn", esc(m.message)); },
 };
 
-function refreshInv() { if (S.drawerMode === "inventory") send({ cmd: "inventory" }); }
+function refreshData() { send({ cmd: "inventory" }); send({ cmd: "map" }); }
 
-// ---------- canvas ----------
+function bumpCounts() {
+  $("m-memories").textContent = S.memories.toLocaleString();
+  $("t-count").textContent = S.memories.toLocaleString();
+  $("m-objects").textContent = S.inventory.filter((o) => !o.ignored).length;
+}
+
+// ---------- clock ----------
+setInterval(() => {
+  const s = Math.floor((Date.now() - S.t0) / 1000);
+  $("clock").textContent = `T+${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}, 1000);
+
+// ---------- live feed canvas ----------
 const view = $("view"), ctx = view.getContext("2d");
-const COLORS = { recognized: "#35d49a", suggest: "#f5b83d", unknown: "#7aa2ff",
-                 ignored: "rgba(120,130,150,.35)", capturing: "#dc244c", pending: "#7aa2ff" };
+const COLORS = { recognized: "#34f0b0", suggest: "#ffbe66", unknown: "#8aa4ff",
+                 ignored: "rgba(128, 133, 171, .35)", capturing: "#dc244c", pending: "#8aa4ff" };
 
 function fit() {
   view.width = view.clientWidth * devicePixelRatio;
   view.height = view.clientHeight * devicePixelRatio;
+  fitMap();
 }
-addEventListener("resize", () => { fit(); draw(); });
-fit();
+addEventListener("resize", () => { fit(); draw(); drawMap(); });
 
-// video letterboxed into canvas; returns mapping
 function mapping() {
   if (!S.frame) return null;
-  const cw = view.width, ch = view.height;
-  const s = Math.min(cw / S.frame.width, ch / S.frame.height);
-  const w = S.frame.width * s, hgt = S.frame.height * s;
-  return { x: (cw - w) / 2, y: (ch - hgt) / 2, w, h: hgt };
+  const s = Math.min(view.width / S.frame.width, view.height / S.frame.height);
+  const w = S.frame.width * s, h = S.frame.height * s;
+  return { x: (view.width - w) / 2, y: (view.height - h) / 2, w, h };
 }
 
 function draw() {
   ctx.clearRect(0, 0, view.width, view.height);
   const m = mapping();
-  if (!m) return;
+  if (!m || !S.cameraOn) { $("no-feed").style.display = "flex"; return; }
   $("no-feed").style.display = "none";
   ctx.drawImage(S.frame, m.x, m.y, m.w, m.h);
-
   for (const b of S.boxes) {
     const t = S.tracks.get(b.tid) || { state: "pending" };
     const st = t.state === "capturing" && S.bursts.has(b.tid) ? "capturing" : t.state;
     const [x1, y1, x2, y2] = b.box;
-    const x = m.x + x1 * m.w, y = m.y + y1 * m.h;
-    const w = (x2 - x1) * m.w, hgt = (y2 - y1) * m.h;
-    drawBox(x, y, w, hgt, st, t, b);
+    drawBox(m.x + x1 * m.w, m.y + y1 * m.h, (x2 - x1) * m.w, (y2 - y1) * m.h, st, t, b);
   }
 }
 
 function drawBox(x, y, w, h, state, t, b) {
   ctx.save();
+  const c = COLORS[state] || COLORS.pending;
   ctx.lineWidth = 2 * devicePixelRatio;
-  ctx.strokeStyle = COLORS[state] || COLORS.pending;
-  ctx.setLineDash(state === "suggest" ? [10, 6] : state === "unknown" || state === "pending" ? [3, 5] : []);
-  if (state === "ignored") ctx.globalAlpha = 0.35;
-  ctx.strokeRect(x, y, w, h);
-  ctx.setLineDash([]);
+  ctx.strokeStyle = c;
+  if (state === "ignored") ctx.globalAlpha = 0.3;
+
+  if (state === "recognized" || state === "capturing") {
+    brackets(x, y, w, h);
+  } else {
+    ctx.setLineDash(state === "suggest" ? [10, 6] : [3, 6]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+  }
 
   const px = 12 * devicePixelRatio;
-  ctx.font = `600 ${px}px ui-monospace, Menlo, monospace`;
-
+  ctx.font = `700 ${px}px "JetBrains Mono", ui-monospace, Menlo, monospace`;
   if (state === "recognized") {
-    chip(x, y - 8 * devicePixelRatio, `${t.label} · ${t.score.toFixed(2)}`, COLORS.recognized);
+    chip(x, y - 8 * devicePixelRatio, ` ${t.label} · ${t.score.toFixed(2)} `, c);
   } else if (state === "suggest") {
-    chip(x, y - 8 * devicePixelRatio, `${t.label}? tap to answer`, COLORS.suggest);
+    chip(x, y - 8 * devicePixelRatio, ` ${t.label}? tap to answer `, c);
   } else if (state === "capturing") {
     const bp = S.bursts.get(b.tid) || { have: 0, want: 6 };
     burstRing(x + w / 2, y + h / 2, Math.min(w, h) * 0.28, bp.have / bp.want);
-    chip(x, y - 8 * devicePixelRatio, `learning ${t.label}…`, COLORS.capturing);
+    chip(x, y - 8 * devicePixelRatio, ` learning ${t.label}… rotate it `, COLORS.capturing);
   } else if (state !== "ignored") {
-    chip(x, y - 8 * devicePixelRatio, "?", COLORS.unknown);
+    chip(x, y - 8 * devicePixelRatio, " ? ", COLORS.unknown);
   }
   ctx.restore();
 }
 
+function brackets(x, y, w, h) {
+  const L = Math.min(w, h) * 0.22;
+  ctx.beginPath();
+  for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+    ctx.moveTo(cx + dx * L, cy);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx, cy + dy * L);
+  }
+  ctx.stroke();
+}
+
 function chip(x, y, text, color) {
-  const pad = 6 * devicePixelRatio;
+  const pad = 5 * devicePixelRatio;
   const wt = ctx.measureText(text).width + pad * 2;
   const ht = 20 * devicePixelRatio;
-  ctx.fillStyle = "rgba(8,12,18,.85)";
+  ctx.fillStyle = "rgba(5, 5, 11, .88)";
   ctx.strokeStyle = color;
   ctx.lineWidth = devicePixelRatio;
   ctx.beginPath();
-  ctx.roundRect(x, y - ht, wt, ht, 5 * devicePixelRatio);
+  ctx.roundRect(x, y - ht, wt, ht, 4 * devicePixelRatio);
   ctx.fill(); ctx.stroke();
   ctx.fillStyle = color;
-  ctx.fillText(text, x + pad, y - ht / 3.2);
+  ctx.fillText(text, x + pad, y - ht / 3.4);
 }
 
 function burstRing(cx, cy, r, frac) {
   ctx.beginPath();
-  ctx.strokeStyle = "rgba(220,36,76,.35)";
+  ctx.strokeStyle = "rgba(220, 36, 76, .3)";
   ctx.lineWidth = 4 * devicePixelRatio;
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.stroke();
@@ -187,19 +261,21 @@ function burstRing(cx, cy, r, frac) {
   ctx.stroke();
 }
 
-// sparkline
+// ---------- sparkline ----------
 const spark = $("spark"), sctx = spark.getContext("2d");
 function drawSpark() {
   const w = spark.width, h = spark.height;
   sctx.clearRect(0, 0, w, h);
   if (S.latencies.length < 2) return;
-  const max = Math.max(...S.latencies, 1);
+  const max = Math.max(...S.latencies, 0.5);
+  sctx.strokeStyle = "rgba(52, 240, 176, .25)";
+  sctx.beginPath(); sctx.moveTo(0, h - 3); sctx.lineTo(w, h - 3); sctx.stroke();
   sctx.beginPath();
-  sctx.strokeStyle = "#35d49a";
+  sctx.strokeStyle = "#34f0b0";
   sctx.lineWidth = 1.5;
   S.latencies.forEach((v, i) => {
     const x = (i / (S.latencies.length - 1)) * w;
-    const y = h - 4 - (v / max) * (h - 10);
+    const y = h - 4 - (v / max) * (h - 12);
     i ? sctx.lineTo(x, y) : sctx.moveTo(x, y);
   });
   sctx.stroke();
@@ -207,7 +283,141 @@ function drawSpark() {
 
 function fmtMs(ms) { return ms < 1 ? `${Math.round(ms * 1000)} µs` : `${ms.toFixed(1)} ms`; }
 
-// ---------- interactions ----------
+// ---------- events feed ----------
+function addEvent(cls, html) {
+  const el = document.createElement("div");
+  el.className = `ev ${cls}`;
+  const t = new Date();
+  el.innerHTML = `<time>${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}:${String(t.getSeconds()).padStart(2, "0")}</time>${html}`;
+  const feed = $("event-feed");
+  feed.prepend(el);
+  while (feed.children.length > 60) feed.lastChild.remove();
+}
+
+// ---------- memory flow particle ----------
+function memPulse() {
+  const from = $("feed-wrap").getBoundingClientRect();
+  const to = $("m-memories").getBoundingClientRect();
+  const dot = document.createElement("div");
+  dot.className = "mem-pulse";
+  dot.style.left = from.left + from.width / 2 + "px";
+  dot.style.top = from.top + from.height / 2 + "px";
+  document.body.appendChild(dot);
+  requestAnimationFrame(() => {
+    dot.style.left = to.left + to.width / 2 + "px";
+    dot.style.top = to.top + to.height / 2 + "px";
+    dot.style.opacity = "0";
+    dot.style.transform = "scale(.4)";
+  });
+  setTimeout(() => dot.remove(), 900);
+  $("m-memories").classList.add("flash");
+  setTimeout(() => $("m-memories").classList.remove("flash"), 700);
+}
+
+// ---------- memory map (constellation) ----------
+const mapC = $("map-canvas"), mctx = mapC.getContext("2d");
+const mapPulses = new Map(); // object_id -> pulse start time
+function fitMap() {
+  mapC.width = mapC.clientWidth * devicePixelRatio;
+  mapC.height = mapC.clientHeight * devicePixelRatio;
+}
+function pulseMapNode(oid) {
+  mapPulses.set(oid, performance.now());
+  drawMap();
+}
+function drawMap() {
+  const w = mapC.width, h = mapC.height;
+  if (!w) return;
+  const pad = 22 * devicePixelRatio;
+  mctx.clearRect(0, 0, w, h);
+  const pts = S.mapPoints.map((p) => ({
+    ...p, px: pad + p.x * (w - pad * 2), py: pad + p.y * (h - pad * 2),
+  }));
+  // constellation edges: each node to its nearest neighbor (decorative)
+  mctx.strokeStyle = "rgba(138, 164, 255, .16)";
+  mctx.lineWidth = devicePixelRatio;
+  for (const p of pts) {
+    let best = null, bd = Infinity;
+    for (const q of pts) {
+      if (q === p) continue;
+      const d = (p.px - q.px) ** 2 + (p.py - q.py) ** 2;
+      if (d < bd) { bd = d; best = q; }
+    }
+    if (best) { mctx.beginPath(); mctx.moveTo(p.px, p.py); mctx.lineTo(best.px, best.py); mctx.stroke(); }
+  }
+  const now = performance.now();
+  let livePulse = false;
+  mctx.font = `${9.5 * devicePixelRatio}px "JetBrains Mono", ui-monospace, monospace`;
+  for (const p of pts) {
+    const hit = !S.searchHits || S.searchHits.has(p.object_id);
+    const color = p.local ? "#dc244c" : "#34f0b0";
+    mctx.globalAlpha = hit ? 1 : 0.15;
+    const pulse = mapPulses.get(p.object_id);
+    if (pulse !== undefined) {
+      const age = (now - pulse) / 700;
+      if (age < 1) {
+        livePulse = true;
+        mctx.beginPath();
+        mctx.strokeStyle = color;
+        mctx.globalAlpha = (1 - age) * (hit ? 1 : 0.15);
+        mctx.arc(p.px, p.py, (4 + age * 14) * devicePixelRatio, 0, Math.PI * 2);
+        mctx.stroke();
+        mctx.globalAlpha = hit ? 1 : 0.15;
+      } else mapPulses.delete(p.object_id);
+    }
+    mctx.fillStyle = color;
+    mctx.shadowColor = color;
+    mctx.shadowBlur = 7 * devicePixelRatio;
+    mctx.beginPath();
+    mctx.arc(p.px, p.py, (S.searchHits && hit ? 5 : 3.5) * devicePixelRatio, 0, Math.PI * 2);
+    mctx.fill();
+    mctx.shadowBlur = 0;
+    mctx.fillStyle = "#b0b4d2";
+    mctx.fillText(p.label.slice(0, 13), p.px + 8 * devicePixelRatio, p.py + 3 * devicePixelRatio);
+  }
+  mctx.globalAlpha = 1;
+  if (livePulse) requestAnimationFrame(drawMap);
+}
+
+// ---------- search ----------
+let searchTimer = null;
+$("search").oninput = () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    const text = $("search").value.trim();
+    if (!text) {
+      S.searchHits = null; S.searchResults = null;
+      renderSearchResults(); drawMap();
+      if (S.drawerMode === "inventory") renderInventory();
+      return;
+    }
+    send({ cmd: "search", text });
+  }, 220);
+};
+
+function renderSearchResults() {
+  const box = $("search-results");
+  if (!S.searchResults || !S.searchResults.text) { box.innerHTML = ""; return; }
+  const { hits, text } = S.searchResults;
+  if (!hits.length) {
+    box.innerHTML = `<div class="result-none">no memory matches «${esc(text)}»</div>`;
+    return;
+  }
+  const max = hits[0].score || 1;
+  box.innerHTML = hits.map((hd) => {
+    const inv = S.inventory.find((o) => o.object_id === hd.object_id) || {};
+    return `<div class="result-row" data-id="${hd.object_id}">
+      <img class="result-thumb" src="${inv.thumb ? "data:image/jpeg;base64," + inv.thumb : ""}" alt="">
+      <span class="result-label">${esc(hd.label)}</span>
+      <span class="result-score"><i style="width:${Math.round((hd.score / max) * 100)}%"></i></span>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".result-row").forEach((el) => {
+    el.onclick = () => { pulseMapNode(el.dataset.id); openDrawer("inventory"); };
+  });
+}
+
+// ---------- feed interactions ----------
 view.addEventListener("click", (e) => {
   const m = mapping();
   if (!m) return;
@@ -216,9 +426,7 @@ view.addEventListener("click", (e) => {
   for (const b of S.boxes) {
     const [x1, y1, x2, y2] = b.box;
     const x = m.x + x1 * m.w, y = m.y + y1 * m.h, w = (x2 - x1) * m.w, h = (y2 - y1) * m.h;
-    if (px >= x && px <= x + w && py >= y && py <= y + h && w * h < bestArea) {
-      best = b; bestArea = w * h;
-    }
+    if (px >= x && px <= x + w && py >= y && py <= y + h && w * h < bestArea) { best = b; bestArea = w * h; }
   }
   if (best) showPop(best, e.offsetX, e.offsetY); else hidePop();
 });
@@ -253,13 +461,10 @@ function showPop(b, cx, cy) {
   pop.innerHTML = html;
   pop.classList.remove("hidden");
   pop.style.left = Math.min(cx, view.clientWidth - 260) + "px";
-  pop.style.top = Math.min(cy, view.clientHeight - 160) + "px";
+  pop.style.top = Math.min(cy, view.clientHeight - 170) + "px";
   const inp = $("teach-name");
   if (inp) { inp.focus(); inp.onkeydown = (ev) => { if (ev.key === "Enter") act("teach", t); }; }
-  pop.onclick = (ev) => {
-    const a = ev.target.dataset && ev.target.dataset.act;
-    if (a) act(a, t);
-  };
+  pop.onclick = (ev) => { const a = ev.target.dataset && ev.target.dataset.act; if (a) act(a, t); };
 }
 
 function act(a, t) {
@@ -275,44 +480,68 @@ function act(a, t) {
   else if (a === "ignore") send({ cmd: "ignore_track", tid, epoch });
   hidePop();
 }
-
 function hidePop() { $("popover").classList.add("hidden"); S.pop = null; }
 
 // ---------- drawers ----------
 $("btn-unknowns").onclick = () => openDrawer("unknowns");
 $("btn-inventory").onclick = () => { openDrawer("inventory"); send({ cmd: "inventory" }); };
 $("drawer-close").onclick = () => closeDrawer();
-$("btn-settings").onclick = () => $("settings").classList.toggle("hidden");
-$("settings-close").onclick = () => $("settings").classList.add("hidden");
+$("btn-tuning").onclick = () => $("tuning").classList.toggle("hidden");
+$("tuning-close").onclick = () => $("tuning").classList.add("hidden");
+$("btn-pull").onclick = () => { send({ cmd: "pull_now" }); addEvent("fleet", "pulling fleet memory…"); };
+$("btn-camera").onclick = () => send({ cmd: "camera", on: !S.cameraOn });
 
 function openDrawer(mode) {
   S.drawerMode = mode;
-  $("drawer-title").textContent = mode === "inventory" ? "inventory · curation" : mode;
+  $("drawer-title").textContent = mode === "inventory" ? "memory · curation" : "unknowns";
   $("drawer").classList.remove("hidden");
   $("drawer-foot").classList.toggle("hidden", mode !== "inventory");
   mode === "unknowns" ? renderUnknowns() : renderInventory();
 }
 function closeDrawer() { S.drawerMode = null; $("drawer").classList.add("hidden"); }
 
-function unknowns() {
+// ---------- unknowns (live + recently departed) ----------
+function liveUnknowns() {
   return S.boxes
     .filter((b) => ["unknown", "pending"].includes((S.tracks.get(b.tid) || { state: "pending" }).state))
     .sort((a, b) => b.stability - a.stability);
 }
+function renderUnknownCount() {
+  $("unknown-count").textContent = liveUnknowns().length + S.archived.size;
+}
 
 function renderUnknowns() {
-  $("unknown-count").textContent = unknowns().length;
-  if (S.drawerMode !== "unknowns") return;
   const body = $("drawer-body");
-  body.innerHTML = unknowns().map((b) => `
-    <div class="unknown-item" data-tid="${b.tid}">
-      <div class="inv-main">
-        <div class="inv-label">track ${b.tid}</div>
-        <div class="stab" style="width:${Math.min(b.stability * 8, 100)}%"></div>
-      </div>
-      <span class="inv-meta">teach →</span>
-    </div>`).join("") || `<p style="color:var(--dim);padding:8px">nothing unknown in view</p>`;
-  body.querySelectorAll(".unknown-item").forEach((el) => {
+  const live = liveUnknowns();
+  let html = "";
+  if (live.length) {
+    html += `<div class="section-head">in view — click to teach</div>`;
+    html += live.map((b) => `
+      <div class="unknown-item" data-tid="${b.tid}">
+        <div class="inv-main">
+          <div class="inv-label">track ${b.tid}</div>
+          <div class="stab" style="width:${Math.min(b.stability * 8, 100)}%"></div>
+        </div>
+        <span class="inv-meta">teach →</span>
+      </div>`).join("");
+  }
+  if (S.archived.size) {
+    html += `<div class="section-head">recently seen — left the frame, still teachable</div>`;
+    html += [...S.archived.values()].reverse().map((a) => `
+      <div class="unknown-item archived" data-key="${a.tid}:${a.epoch}" style="cursor:default">
+        <img class="unk-thumb" src="${a.thumb ? "data:image/jpeg;base64," + a.thumb : ""}" alt="">
+        <div class="inv-main">
+          <div class="teach-inline">
+            <input type="text" placeholder="what was this?" data-tid="${a.tid}" data-epoch="${a.epoch}">
+            <button class="mini-btn" data-act="teach">teach</button>
+            <button class="mini-btn" data-act="dismiss">✕</button>
+          </div>
+        </div>
+      </div>`).join("");
+  }
+  body.innerHTML = html || `<p style="color:var(--faint);padding:8px">nothing unknown — show me something new</p>`;
+
+  body.querySelectorAll(".unknown-item:not(.archived)").forEach((el) => {
     el.onclick = () => {
       const b = S.boxes.find((x) => x.tid === +el.dataset.tid);
       if (b) {
@@ -322,35 +551,38 @@ function renderUnknowns() {
       }
     };
   });
+  body.querySelectorAll(".archived").forEach((el) => {
+    const input = el.querySelector("input");
+    const doTeach = () => {
+      const label = input.value.trim();
+      if (!label) return;
+      send({ cmd: "teach", tid: +input.dataset.tid, epoch: +input.dataset.epoch, label });
+    };
+    input.onkeydown = (ev) => { if (ev.key === "Enter") doTeach(); };
+    el.querySelector('[data-act="teach"]').onclick = doTeach;
+    el.querySelector('[data-act="dismiss"]').onclick = () =>
+      send({ cmd: "dismiss_unknown", tid: +input.dataset.tid, epoch: +input.dataset.epoch });
+  });
 }
 
+// ---------- inventory + curation ----------
 function renderInventory() {
   const body = $("drawer-body");
-  $("drawer-foot").classList.remove("hidden");
-  if (!S.inventory.length) {
-    body.innerHTML = `<p style="color:var(--dim);padding:8px">no memories yet — teach something</p>`;
-    updateCuration();
-    return;
+  const objects = S.inventory.filter((o) => !o.ignored);
+  const ignored = S.inventory.filter((o) => o.ignored);
+  let html = "";
+  if (!objects.length && !ignored.length) {
+    html = `<p style="color:var(--faint);padding:8px">no memories yet — teach something</p>`;
   }
-  body.innerHTML = S.inventory.map((o) => `
-    <div class="inv-item" data-id="${o.object_id}"
-         style="${S.searchHits && !S.searchHits.has(o.object_id) ? "opacity:.25" : ""}">
-      ${o.local ? `<input type="checkbox" class="inv-check" data-id="${o.object_id}"
-        ${S.selected.has(o.object_id) ? "checked" : ""}>` : ""}
-      <img class="inv-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">
-      <div class="inv-main">
-        <div class="inv-label">${esc(o.label)}
-          <span class="badge ${o.local ? "" : "fleet"}">${o.local ? o.pushed ? "pushed" : "local" : "fleet"}</span>
-        </div>
-        <div class="inv-meta">${o.views.length} views · ${esc(o.device || "")}</div>
-      </div>
-      <div class="inv-actions">
-        ${o.local ? `<button class="mini-btn" data-act="rename" title="rename">✎</button>
-        <button class="mini-btn" data-act="ignore" title="ignore (blocklist)">⊘</button>
-        <button class="mini-btn" data-act="forget" title="forget">✕</button>` : ""}
-      </div>
-    </div>
-    ${o.local && S.expanded === o.object_id ? viewsRow(o) : ""}`).join("");
+  if (objects.length) {
+    html += `<div class="section-head">objects — select to push or merge</div>`;
+    html += objects.map((o) => invRow(o)).join("");
+  }
+  if (ignored.length) {
+    html += `<div class="section-head">ignored — blocklisted looks, never tracked</div>`;
+    html += ignored.map((o) => invRow(o)).join("");
+  }
+  body.innerHTML = html;
 
   body.querySelectorAll(".inv-item").forEach((el) => {
     el.onclick = () => {
@@ -375,11 +607,12 @@ function renderInventory() {
     btn.onclick = (ev) => {
       ev.stopPropagation();
       const id = btn.closest(".inv-item").dataset.id;
-      if (btn.dataset.act === "forget" && confirm("forget this object?"))
-        send({ cmd: "forget", object_id: id });
-      if (btn.dataset.act === "ignore" && confirm("blocklist this object? it will never be tracked again"))
+      const actn = btn.dataset.act;
+      if (actn === "forget" && confirm("forget this object?")) send({ cmd: "forget", object_id: id });
+      if (actn === "unignore") send({ cmd: "forget", object_id: id });
+      if (actn === "ignore" && confirm("blocklist this object? it will never be tracked again"))
         send({ cmd: "ignore_object", object_id: id });
-      if (btn.dataset.act === "rename") {
+      if (actn === "rename") {
         const label = prompt("new name:");
         if (label) send({ cmd: "rename", object_id: id, label });
       }
@@ -388,12 +621,38 @@ function renderInventory() {
   updateCuration();
 }
 
+function invRow(o) {
+  const dimmed = S.searchHits && !S.searchHits.has(o.object_id);
+  const badge = o.ignored
+    ? `<span class="badge ignored">ignored</span>`
+    : `<span class="badge ${o.local ? "" : "fleet"}">${o.local ? (o.pushed ? "pushed" : "local") : "fleet"}</span>`;
+  const actions = o.ignored
+    ? `<button class="mini-btn" data-act="unignore" title="track this again">unignore</button>`
+    : o.local
+      ? `<button class="mini-btn" data-act="rename" title="rename">✎</button>
+         <button class="mini-btn" data-act="ignore" title="blocklist">⊘</button>
+         <button class="mini-btn" data-act="forget" title="forget">✕</button>`
+      : "";
+  return `
+    <div class="inv-item" data-id="${o.object_id}" style="${dimmed ? "opacity:.25" : ""}">
+      ${o.local && !o.ignored ? `<input type="checkbox" class="inv-check" data-id="${o.object_id}"
+        ${S.selected.has(o.object_id) ? "checked" : ""}>` : ""}
+      <img class="inv-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">
+      <div class="inv-main">
+        <div class="inv-label">${esc(o.label || "(unnamed)")} ${badge}</div>
+        <div class="inv-meta">${o.views.length} vector${o.views.length === 1 ? "" : "s"} · ${esc(o.device || "")}</div>
+      </div>
+      <div class="inv-actions">${actions}</div>
+    </div>
+    ${(o.local || o.ignored) && S.expanded === o.object_id ? viewsRow(o) : ""}`;
+}
+
 function viewsRow(o) {
   return `<div class="views-row">
     ${o.views.map((v) => `
-      <span class="view-cell ${v.human ? "human" : ""}" title="${v.human ? "human-taught" : "auto view"}">
-        <img src="/thumbs/${v.view_id}.jpg" alt="" onerror="this.style.opacity=.15">
-        <button class="view-x" data-oid="${o.object_id}" data-vid="${v.view_id}" title="prune this view">✕</button>
+      <span class="view-cell ${v.human ? "human" : ""}" title="${v.human ? "human-taught view" : "auto-captured view"}">
+        <img src="/thumbs/${v.view_id}.jpg" alt="" onerror="this.style.opacity=.12">
+        <button class="view-x" data-oid="${o.object_id}" data-vid="${v.view_id}" title="prune this vector">✕</button>
       </span>`).join("")}
   </div>`;
 }
@@ -401,14 +660,13 @@ function viewsRow(o) {
 function updateCuration() {
   const n = S.selected.size;
   $("btn-push").disabled = n === 0 || !S.fleetOn;
-  $("btn-push").textContent = n ? `⛟ push ${n} to fleet` : "⛟ push to fleet";
+  $("btn-push").textContent = n ? `⛟ PUSH ${n} TO FLEET` : "⛟ PUSH TO FLEET";
   $("btn-merge").disabled = n !== 2;
 }
-
 $("btn-push").onclick = () => {
   if (!S.selected.size) return;
   send({ cmd: "push", object_ids: [...S.selected] });
-  toast(`pushing ${S.selected.size} to the fleet…`);
+  addEvent("fleet", `pushing ${S.selected.size} to the fleet…`);
   S.selected.clear();
   updateCuration();
 };
@@ -418,15 +676,14 @@ $("btn-merge").onclick = () => {
     send({ cmd: "merge", keep_id: a, fold_id: b });
   S.selected.clear();
 };
-$("btn-pull").onclick = () => send({ cmd: "pull_now" });
 
-// ---------- settings ----------
+// ---------- tuning ----------
 function initSliders(t, conf) {
   const wire = (id, vid, val, fn) => {
     const el = $(id);
     el.value = val;
     $(vid).textContent = (+val).toFixed(2);
-    el.oninput = () => { $(vid).textContent = (+el.value).toFixed(2); fn(); };
+    el.oninput = () => { $(vid).textContent = (+el.value).toFixed(2); fn(); tierBand(); };
   };
   const sendT = () => send({ cmd: "thresholds", s_same: +$("s-same").value,
                              s_suggest: +$("s-suggest").value, s_ignore: +$("s-ignore").value });
@@ -434,49 +691,30 @@ function initSliders(t, conf) {
   wire("s-suggest", "v-suggest", t.s_suggest, sendT);
   wire("s-ignore", "v-ignore", t.s_ignore, sendT);
   wire("s-conf", "v-conf", conf, () => send({ cmd: "conf", value: +$("s-conf").value }));
+  tierBand();
+}
+function tierBand() {
+  const sug = +$("s-suggest").value, same = +$("s-same").value;
+  const bands = document.querySelectorAll("#tier-band .band");
+  bands[0].style.width = sug * 100 + "%";
+  bands[1].style.width = Math.max(same - sug, 0) * 100 + "%";
+  bands[2].style.width = (1 - same) * 100 + "%";
 }
 
-// ---------- misc ----------
-// ---------- search / map / scale stunt ----------
-let searchTimer = null;
-$("search").oninput = () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    const text = $("search").value.trim();
-    if (!text) { S.searchHits = null; renderInventory(); drawMap(); return; }
-    send({ cmd: "search", text });
-  }, 250);
-};
-
-$("btn-map").onclick = () => {
-  $("map-panel").classList.toggle("hidden");
-  if (!$("map-panel").classList.contains("hidden")) send({ cmd: "map" });
-};
-$("map-close").onclick = () => $("map-panel").classList.add("hidden");
-setInterval(() => {
-  if (!$("map-panel").classList.contains("hidden")) send({ cmd: "map" });
-}, 5000);
-
-const mapC = $("map-canvas"), mctx = mapC.getContext("2d");
-function drawMap() {
-  if ($("map-panel").classList.contains("hidden")) return;
-  const w = mapC.width, h = mapC.height, pad = 26;
-  mctx.clearRect(0, 0, w, h);
-  mctx.font = "10px ui-monospace, Menlo, monospace";
-  for (const p of S.mapPoints) {
-    const x = pad + p.x * (w - pad * 2), y = pad + p.y * (h - pad * 2);
-    const hit = !S.searchHits || S.searchHits.has(p.object_id);
-    mctx.globalAlpha = hit ? 1 : 0.18;
-    mctx.fillStyle = p.local ? "#dc244c" : "#35d49a";
-    mctx.beginPath();
-    mctx.arc(x, y, S.searchHits && hit ? 6 : 4, 0, Math.PI * 2);
-    mctx.fill();
-    mctx.fillStyle = "#7d8ca0";
-    mctx.fillText(p.label.slice(0, 14), x + 7, y + 3);
-  }
-  mctx.globalAlpha = 1;
+// ---------- camera / fleet / scale ----------
+function setCamera(on) {
+  S.cameraOn = on;
+  $("btn-camera").classList.toggle("cam-off", !on);
+  $("btn-camera").textContent = on ? "⏻ CAMERA" : "⏻ CAMERA OFF";
+  $("rec").style.display = on ? "flex" : "none";
+  if (!on) { S.frame = null; S.boxes = []; draw(); }
 }
-
+function setFleet(on) {
+  S.fleetOn = on;
+  $("fleet-dot").className = "unit-dot " + (on ? "" : "off");
+  $("fleet-label").textContent = on ? "fleet linked" : "fleet offline";
+  $("btn-pull").classList.toggle("hidden", !on);
+}
 addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() === "s" && !e.metaKey && !e.ctrlKey
       && !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
@@ -484,12 +722,7 @@ addEventListener("keydown", (e) => {
   }
 });
 
-function setFleet(on) {
-  S.fleetOn = on;
-  $("fleet-dot").className = "fleet-dot " + (on ? "on" : "off");
-  $("fleet-label").textContent = on ? "fleet linked" : "fleet offline";
-  $("btn-pull").classList.toggle("hidden", !on);
-}
+// ---------- misc ----------
 function toast(msg) {
   const el = document.createElement("div");
   el.className = "toast";
@@ -501,4 +734,6 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-setInterval(renderUnknowns, 1000);
+
+fit();
+setInterval(renderUnknownCount, 1000);

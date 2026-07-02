@@ -28,6 +28,7 @@ DIVERSITY_MAX = 0.95  # skip a new view too similar to a stored row
 NEG_CAP = 8
 BURST_VIEWS = 6  # teach burst: capture until this many views...
 BURST_SECONDS = 3.0  # ...or this much time
+ARCHIVE_CAP = 12  # departed unknowns kept teachable (wrist goes down, watch stays)
 
 
 def fold_rows(krows: list, kviews: list, frows: list, fviews: list) -> tuple[list, list]:
@@ -138,6 +139,14 @@ class InventoryRequest:
 
 
 @dataclass(slots=True)
+class DismissUnknown:
+    """Drop an archived (departed) unknown from the recent list."""
+
+    tid: int
+    epoch: int
+
+
+@dataclass(slots=True)
 class SearchRequest:
     text: str
 
@@ -218,6 +227,8 @@ class Core:
         self.event_tag = event_tag
         self.thresholds = Thresholds()
         self.tracks: dict[int, TrackState] = {}
+        # departed-but-unnamed tracks, still teachable from the unknowns drawer
+        self.recent_unknowns: dict[tuple[int, int], TrackState] = {}
         # session-scoped negatives for fleet (immutable) objects — not persisted (§3.5)
         self.session_negs: dict[str, list] = {}
         self._on_event = on_event or (lambda e: None)
@@ -280,7 +291,17 @@ class Core:
                     return  # stale worker result from a dead incarnation
             else:
                 if ts is None or ts.epoch != msg.epoch:
-                    return  # verb or death notice aimed at a track that re-bound or died
+                    # a verb aimed at a departed track may still hit its archived
+                    # incarnation — the item left frame, but stays teachable
+                    key = (tid, msg.epoch)
+                    if isinstance(msg, Teach) and key in self.recent_unknowns:
+                        self._teach_archived(msg, self.recent_unknowns.pop(key))
+                        return
+                    if isinstance(msg, DismissUnknown) and key in self.recent_unknowns:
+                        del self.recent_unknowns[key]
+                        self._emit({"type": "unknown_removed", "tid": tid, "epoch": msg.epoch})
+                        return
+                    return  # otherwise: stale, drop
         handler = getattr(self, f"_on_{type(msg).__name__.lower()}")
         handler(msg)
 
@@ -464,6 +485,7 @@ class Core:
         if ts.last_vec is None:
             return
         view_id = uuid.uuid4().hex[:12]
+        self._save_view_thumb(view_id, ts.last_thumb)
         self.store.upsert_object(
             new_id(),
             "",
@@ -471,6 +493,7 @@ class Core:
             [{"view_id": view_id, "human": True}],
             kind="ignored",
             device=self.device_name,
+            thumb=base64.b64encode(ts.last_thumb).decode() if ts.last_thumb else "",
         )
         ts.state, ts.object_id, ts.label, ts.score = "ignored", None, "", 1.0
         self._track_event(m.tid, ts)
@@ -488,8 +511,17 @@ class Core:
             list(payload.get("views") or []),
             kind="ignored",
             device=self.device_name,
+            thumb=payload.get("thumb", ""),
         )
-        self._forget(m.object_id, payload)
+        # delete the object point but keep the view thumbs — they moved to the
+        # blocklist entry (same view_ids), where curation can still inspect them
+        self.store.delete(m.object_id)
+        for tid, ts in self.tracks.items():
+            if ts.object_id == m.object_id:
+                ts.state, ts.object_id, ts.label, ts.score = "unknown", None, "", 0.0
+                self._track_event(tid, ts)
+        self._emit({"type": "object_deleted", "object_id": m.object_id})
+        self._emit_stats()
 
     def _on_forget(self, m: Forget):
         got = self.store.get_object(m.object_id, with_vectors=False)
@@ -602,7 +634,53 @@ class Core:
         self._emit({"type": "object_updated", "object_id": m.object_id, "views": len(views)})
 
     def _on_trackdied(self, m: TrackDied):
-        del self.tracks[m.tid]
+        ts = self.tracks.pop(m.tid)
+        if ts.state in ("unknown", "suggest") and ts.last_vec is not None:
+            self.recent_unknowns[(m.tid, ts.epoch)] = ts
+            while len(self.recent_unknowns) > ARCHIVE_CAP:
+                old_key = next(iter(self.recent_unknowns))
+                del self.recent_unknowns[old_key]
+                self._emit({"type": "unknown_removed", "tid": old_key[0], "epoch": old_key[1]})
+            self._emit(
+                {
+                    "type": "unknown_archived",
+                    "tid": m.tid,
+                    "epoch": ts.epoch,
+                    "thumb": base64.b64encode(ts.last_thumb).decode() if ts.last_thumb else "",
+                    "t": ts.last_seen,
+                }
+            )
+
+    def _on_dismissunknown(self, m: DismissUnknown):
+        pass  # live-track dismiss is a no-op; archived dismiss is handled in _process
+
+    def _teach_archived(self, m: Teach, ts: TrackState):
+        """Teach a departed track from its remembered view. No capture burst —
+        the item isn't in frame; re-showing it accretes views the normal way."""
+        label = m.label.strip()
+        if not label:
+            return
+        existing = self.store.find_label(label)
+        if existing:
+            fake = Ingest(m.tid, m.epoch, ts.last_vec, ts.last_thumb, ts.last_quality, ts.last_seen)
+            self._maybe_accrete(existing, fake, human=True)
+            self._emit({"type": "object_updated", "object_id": existing, "folded": True})
+        else:
+            object_id = new_id()
+            view_id = uuid.uuid4().hex[:12]
+            self._save_view_thumb(view_id, ts.last_thumb)
+            self.store.upsert_object(
+                object_id,
+                label,
+                [ts.last_vec],
+                [{"view_id": view_id, "human": True}],
+                device=self.device_name,
+                event=self.event_tag,
+                thumb=base64.b64encode(ts.last_thumb).decode() if ts.last_thumb else "",
+            )
+            self._emit({"type": "object_created", "object_id": object_id, "label": label})
+        self._emit({"type": "unknown_removed", "tid": m.tid, "epoch": m.epoch})
+        self._emit_stats()
 
     def _on_setthresholds(self, m: SetThresholds):
         self.thresholds = Thresholds(m.s_same, m.s_suggest, m.s_ignore)
@@ -754,18 +832,22 @@ class Core:
 
     def _on_inventoryrequest(self, m: InventoryRequest):
         items = []
-        for pid, pl, from_mut in self.store.scroll_objects():
-            items.append(
-                {
-                    "object_id": pid,
-                    "label": pl.get("label", ""),
-                    "views": pl.get("views") or [],
-                    "thumb": pl.get("thumb", ""),
-                    "device": pl.get("device", ""),
-                    "local": from_mut,
-                    "pushed": bool(pl.get("t_sync")),
-                }
-            )
+        for kind in ("object", "ignored"):
+            for pid, pl, from_mut in self.store.scroll_objects(
+                kind=kind, mutable_only=kind == "ignored"
+            ):
+                items.append(
+                    {
+                        "object_id": pid,
+                        "label": pl.get("label", ""),
+                        "views": pl.get("views") or [],
+                        "thumb": pl.get("thumb", ""),
+                        "device": pl.get("device", ""),
+                        "local": from_mut,
+                        "pushed": bool(pl.get("t_sync")),
+                        "ignored": kind == "ignored",
+                    }
+                )
         self._emit({"type": "inventory", "items": items})
 
     def _emit_stats(self):

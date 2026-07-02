@@ -39,6 +39,22 @@ def area_band_ok(box: tuple[float, float, float, float]) -> bool:
     return MIN_AREA <= area <= MAX_AREA
 
 
+# People and body parts are suppressed at the proposal level (Dylan, 2026-07-01):
+# hands and faces must not flood the unknowns queue. This is the ONE use of the
+# detector's class names in the app — object names still come from vector search.
+PERSON_WORDS = frozenset(
+    "person people man men woman women boy girl child kid baby human humans face "
+    "faces head hair ear eye eyes nose mouth lip lips chin cheek forehead beard "
+    "mustache moustache neck shoulder arm arms elbow wrist hand hands finger "
+    "fingers thumb fist chest torso waist hip leg legs knee ankle foot feet toe "
+    "toes skin body".split()
+)
+
+
+def is_person_like(class_name: str) -> bool:
+    return any(w in PERSON_WORDS for w in class_name.lower().replace("-", " ").split())
+
+
 @dataclass(slots=True)
 class Proposal:
     """One tracked region. No label — the detector has no say in what things are."""
@@ -102,11 +118,13 @@ class Detector:
         boxes = result.boxes
         polys = result.masks.xy if result.masks is not None else None
         if boxes is not None and boxes.id is not None:
-            triples = zip(boxes.id, boxes.conf, boxes.xyxy, strict=False)
-            for i, (tid, cf, xyxy) in enumerate(triples):
+            quads = zip(boxes.id, boxes.cls, boxes.conf, boxes.xyxy, strict=False)
+            for i, (tid, cls, cf, xyxy) in enumerate(quads):
                 x1, y1, x2, y2 = (float(v) for v in xyxy)
                 box = (x1 / w, y1 / h, x2 / w, y2 / h)
                 if not area_band_ok(box):
+                    continue
+                if is_person_like(result.names.get(int(cls), "")):
                     continue
                 mask = polys[i] if polys is not None and i < len(polys) else None
                 proposals.append(Proposal(int(tid), float(cf), box, mask))

@@ -84,10 +84,17 @@ class Pipeline:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._frame_count = 0
-        # camera runs only while someone is watching; drive mode is always on
+        # camera runs only while someone is watching AND the user has it enabled;
+        # drive mode is always on
         self._active = threading.Event()
+        self._viewers = False
+        self.user_enabled = True
         if drive_mode:
             self._active.set()
+        # rolling perf counters for the HUD's pipeline ticker
+        self.last_embed_ms = 0.0
+        self._tick_times: list[float] = []
+        self._last_perf = 0.0
 
     # -- lifecycle --
 
@@ -108,7 +115,17 @@ class Pipeline:
 
     def set_active(self, on: bool):
         """First viewer connects -> camera on; last one leaves -> camera released."""
-        if on or self.drive_mode:
+        self._viewers = on
+        self._recompute()
+
+    def set_user_enabled(self, on: bool):
+        """The UI's camera on/off switch; wins over viewer presence."""
+        self.user_enabled = on
+        self._recompute()
+        self.broadcast({"type": "camera", "on": on})
+
+    def _recompute(self):
+        if self.drive_mode or (self._viewers and self.user_enabled):
             self._active.set()
         else:
             self._active.clear()
@@ -158,6 +175,7 @@ class Pipeline:
         self._frame_count += 1
         now = self._frame_count / DRIVE_FPS if self.drive_mode else time.time()
         props, detect_ms = self.detector.track(frame)
+        self._perf(detect_ms, len(props))
 
         to_embed, died = self.scheduler.tick(
             [p.tid for p in props], now, burst_tids=self.burst_tids
@@ -193,6 +211,21 @@ class Pipeline:
             }
         )
 
+    def _perf(self, detect_ms: float, n_tracks: int):
+        t = time.time()
+        self._tick_times = [x for x in self._tick_times if t - x < 3.0] + [t]
+        if t - self._last_perf >= 1.0:
+            self._last_perf = t
+            self.broadcast(
+                {
+                    "type": "perf",
+                    "fps": round(len(self._tick_times) / 3.0, 1),
+                    "detect_ms": round(detect_ms, 0),
+                    "embed_ms": round(self.last_embed_ms, 1),
+                    "tracks": n_tracks,
+                }
+            )
+
     # -- embed thread --
 
     def _embed_loop(self):
@@ -202,7 +235,9 @@ class Pipeline:
             if jobs is None:
                 return
             try:
+                t0 = time.perf_counter_ns()
                 vecs = self.embedder.embed([crop for _, _, crop, _, _ in jobs])
+                self.last_embed_ms = (time.perf_counter_ns() - t0) / 1e6 / len(jobs)
             except Exception:
                 logger.exception("embed batch failed")
                 continue

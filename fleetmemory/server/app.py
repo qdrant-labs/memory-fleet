@@ -133,6 +133,7 @@ def _hello(app) -> dict:
         "memories": app.state.store.count(),
         "thresholds": {"s_same": t.s_same, "s_suggest": t.s_suggest, "s_ignore": t.s_ignore},
         "detector_conf": app.state.pipeline.detector.conf,
+        "camera": app.state.pipeline.user_enabled,
     }
 
 
@@ -147,6 +148,9 @@ def _dispatch(app, m: dict):
         return
     if cmd == "conf":
         pipeline.detector.conf = float(m["value"])
+        return
+    if cmd == "camera":
+        pipeline.set_user_enabled(bool(m.get("on")))
         return
     if cmd in ("pull_now", "push"):
         sync = app.state.sync
@@ -176,6 +180,8 @@ def _to_message(m: dict, cmd: str):
             )
         case "ignore_track":
             return verbs.IgnoreTrack(tid=int(m["tid"]), epoch=int(m["epoch"]))
+        case "dismiss_unknown":
+            return verbs.DismissUnknown(tid=int(m["tid"]), epoch=int(m["epoch"]))
         case "ignore_object":
             return verbs.IgnoreObject(object_id=str(m["object_id"]))
         case "forget":
