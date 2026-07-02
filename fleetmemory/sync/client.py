@@ -10,38 +10,71 @@ import requests
 from qdrant_client import QdrantClient, models
 from qdrant_edge import Bm25, Bm25Config
 
+from fleetmemory.memory.store import LABEL_DENSE_DIM
+
 logger = logging.getLogger(__name__)
 
 COLLECTION = "fleet"
 
 
 class FleetClient:
-    def __init__(self, url: str, api_key: str | None, collection: str = COLLECTION, dim: int = 512):
+    def __init__(
+        self,
+        url: str,
+        api_key: str | None,
+        collection: str = COLLECTION,
+        dim: int = 512,
+        label_embedder=None,
+    ):
         self.url = url.rstrip("/")
         self.api_key = api_key or None
         self.collection = collection
         self.dim = dim
+        self.labels = label_embedder  # same hybrid embeddings as on-device
         self.client = QdrantClient(url=self.url, api_key=self.api_key, timeout=30)
         self._bm25 = Bm25(Bm25Config())
         self._headers = {"api-key": api_key} if api_key else {}
 
     # ---------- schema ----------
 
+    def _vectors_config(self):
+        return {
+            "exemplars": models.VectorParams(
+                size=self.dim,
+                distance=models.Distance.COSINE,
+                multivector_config=models.MultiVectorConfig(
+                    comparator=models.MultiVectorComparator.MAX_SIM
+                ),
+            ),
+            "label_dense": models.VectorParams(
+                size=LABEL_DENSE_DIM, distance=models.Distance.COSINE
+            ),
+        }
+
     def ensure_collection(self):
-        """Create the fleet collection with the §3.3 schema if it doesn't exist."""
+        """Create the fleet collection with the current schema. An EMPTY
+        collection on an older schema (no label_dense) is recreated in place —
+        adding named vectors server-side needs Qdrant >= 1.18, and Cloud runs
+        1.17. A non-empty old-schema collection is left alone with a warning."""
         if self.client.collection_exists(self.collection):
-            return
+            info = self.client.get_collection(self.collection)
+            vecs = info.config.params.vectors or {}
+            if isinstance(vecs, dict) and "label_dense" in vecs:
+                return
+            if info.points_count == 0:
+                self.client.delete_collection(self.collection)
+                logger.info("fleet collection %r: empty, old schema — recreating", self.collection)
+            else:
+                logger.warning(
+                    "fleet collection %r predates hybrid search and has data; "
+                    "label_dense pushes disabled for it",
+                    self.collection,
+                )
+                self.labels = None
+                return
         self.client.create_collection(
             collection_name=self.collection,
-            vectors_config={
-                "exemplars": models.VectorParams(
-                    size=self.dim,
-                    distance=models.Distance.COSINE,
-                    multivector_config=models.MultiVectorConfig(
-                        comparator=models.MultiVectorComparator.MAX_SIM
-                    ),
-                )
-            },
+            vectors_config=self._vectors_config(),
             sparse_vectors_config={
                 "label": models.SparseVectorParams(modifier=models.Modifier.IDF)
             },
@@ -79,21 +112,18 @@ class FleetClient:
         )
         return recs[0] if recs else None
 
-    def _sparse_label(self, label: str) -> models.SparseVector:
-        sv = self._bm25.embed_document(label or " ")  # same BM25 as on-device (qdrant_edge)
-        return models.SparseVector(indices=list(sv.indices), values=list(sv.values))
-
     def upsert_object(self, point_id: str, label: str, rows: list, payload: dict):
+        vector = {"exemplars": [list(map(float, r)) for r in rows]}
+        if self.labels is not None:  # miniCOIL sparse + dense, same models as on-device
+            sparse, dense = self.labels.embed_doc(label)
+            vector["label"] = models.SparseVector(
+                indices=list(sparse.indices), values=list(sparse.values)
+            )
+            vector["label_dense"] = dense
+        else:  # model-free fallback (sync tests): on-device BM25
+            sv = self._bm25.embed_document(label or " ")
+            vector["label"] = models.SparseVector(indices=list(sv.indices), values=list(sv.values))
         self.client.upsert(
             self.collection,
-            points=[
-                models.PointStruct(
-                    id=point_id,
-                    vector={
-                        "exemplars": [list(map(float, r)) for r in rows],
-                        "label": self._sparse_label(label),
-                    },
-                    payload=payload,
-                )
-            ],
+            points=[models.PointStruct(id=point_id, vector=vector, payload=payload)],
         )

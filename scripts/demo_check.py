@@ -44,6 +44,14 @@ def embedder():
     assert vecs[0].shape == (DIM,)
 
 
+def label_models():
+    from fleetmemory.memory.labels import LabelEmbedder
+
+    emb = LabelEmbedder()
+    sparse, dense = emb.embed_doc("red coffee mug")
+    assert len(dense) == 384 and len(list(sparse.indices)) > 0
+
+
 def edge():
     import tempfile
 
@@ -60,6 +68,7 @@ def main():
         [
             check("YOLOE detector (local weights)", detector),
             check("Unicom embedder (fastembed cache)", embedder),
+            check("miniCOIL + dense label models (fastembed cache)", label_models),
             check("Qdrant Edge shard create/load", edge),
         ]
     )

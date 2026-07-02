@@ -441,7 +441,7 @@ function renderSearchResults() {
   const box = $("search-results");
   if (!S.searchResults || !S.searchResults.text) {
     box.innerHTML = "";
-    $("search-ms").textContent = "hybrid · on-device";
+    $("search-ms").textContent = "miniCOIL + dense · RRF";
     return;
   }
   const { hits, text, ms } = S.searchResults;

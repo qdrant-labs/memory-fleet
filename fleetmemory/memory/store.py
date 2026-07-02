@@ -4,6 +4,7 @@ point id — mutable wins ties. The shard is the source of truth for vectors;
 nothing here caches them (PLAN.md §12.3).
 """
 
+import contextlib
 import shutil
 import tarfile
 import time
@@ -36,6 +37,9 @@ from qdrant_edge import (
 )
 
 DIM = 512  # Unicom-ViT-B-32; tests use smaller dims via the dim argument
+LABEL_DENSE_DIM = 384  # bge-small-en-v1.5 (labels.py); field exists even in BM25 fallback
+RRF_K = 2  # Qdrant's reciprocal-rank-fusion default
+DENSE_LABEL_FLOOR = 0.6  # bge cosine below this is noise, not a semantic neighbor
 
 
 def shard_config(dim: int) -> EdgeConfig:
@@ -45,8 +49,10 @@ def shard_config(dim: int) -> EdgeConfig:
                 size=dim,
                 distance=Distance.Cosine,
                 multivector_config=MultiVectorConfig(comparator=MultiVectorComparator.MaxSim),
-            )
+            ),
+            "label_dense": EdgeVectorParams(size=LABEL_DENSE_DIM, distance=Distance.Cosine),
         },
+        # IDF modifier serves both miniCOIL (requires it) and the BM25 fallback
         sparse_vectors={"label": EdgeSparseVectorParams(modifier=Modifier.Idf)},
     )
 
@@ -73,10 +79,19 @@ class RecognitionResult:
 class Store:
     """Owns the Edge shards. All calls happen on the core thread."""
 
-    def __init__(self, data_dir: str | Path, dim: int = DIM, with_immutable: bool = False):
+    def __init__(
+        self,
+        data_dir: str | Path,
+        dim: int = DIM,
+        with_immutable: bool = False,
+        label_embedder=None,
+    ):
         self.dim = dim
         self.data_dir = Path(data_dir)
         self._bm25 = Bm25(Bm25Config())
+        # miniCOIL + dense (labels.LabelEmbedder) when models are available;
+        # None -> BM25-only fallback (deterministic gate, CI-style sync tests)
+        self.labels = label_embedder
 
         mut_dir = self.data_dir / "mutable"
         fresh = not mut_dir.exists()
@@ -90,15 +105,27 @@ class Store:
             self.mutable.update(
                 UpdateOperation.create_field_index("kind", PayloadSchemaType.Keyword)
             )
+        else:
+            self._migrate_label_dense(self.mutable)
 
         self.scale = None  # optional stunt shard, attached on demand
         self.immutable = None
         immut_dir = self.data_dir / "immutable"
         if immut_dir.exists():
             self.immutable = EdgeShard.load(str(immut_dir))
+            self._migrate_label_dense(self.immutable)
         elif with_immutable:
             immut_dir.mkdir(parents=True)
             self.immutable = EdgeShard.create(str(immut_dir), shard_config(dim))
+
+    @staticmethod
+    def _migrate_label_dense(shard: EdgeShard):
+        """Shards created before the hybrid-search schema gain label_dense in
+        place (verified on Edge 0.7.2; no-op error when it already exists)."""
+        with contextlib.suppress(Exception):
+            shard.update(
+                UpdateOperation.create_dense_vector("label_dense", LABEL_DENSE_DIM, Distance.Cosine)
+            )
 
     def close(self):
         self.mutable.close()
@@ -183,20 +210,47 @@ class Store:
         }
         if t_sync is not None:
             payload["t_sync"] = t_sync
+        vector = {"exemplars": [r.tolist() for r in rows]}
+        if self.labels is not None:
+            sparse, dense = self.labels.embed_doc(label)
+            vector["label"] = sparse
+            vector["label_dense"] = dense
+            payload["label_v"] = 2  # hybrid-era label vectors (miniCOIL + dense)
+        else:
+            vector["label"] = self._bm25.embed_document(label or " ")
         self.mutable.update(
-            UpdateOperation.upsert_points(
-                [
-                    Point(
-                        id=object_id,
-                        vector={
-                            "exemplars": [r.tolist() for r in rows],
-                            "label": self._bm25.embed_document(label or " "),
-                        },
-                        payload=payload,
-                    )
-                ]
-            )
+            UpdateOperation.upsert_points([Point(id=object_id, vector=vector, payload=payload)])
         )
+
+    def reembed_labels(self) -> int:
+        """One-shot migration: points taught before hybrid search carry
+        BM25-space label vectors that miniCOIL/dense queries can't see.
+        Re-embed them in place. Idempotent (label_v marker); mutable only —
+        the mirror re-fills from fleet pushes. Call on the core thread."""
+        if self.labels is None:
+            return 0
+        stale = []
+        for kind in ("object", "ignored"):
+            for pid, pl, _ in self.scroll_objects(kind=kind, mutable_only=True):
+                if pl.get("label_v") != 2:
+                    stale.append(pid)
+        for pid in stale:
+            payload, rows = self.get_object(pid)
+            self.upsert_object(
+                pid,
+                payload.get("label", ""),
+                rows,
+                list(payload.get("views") or []),
+                kind=payload.get("kind", "object"),
+                neg=payload.get("neg"),
+                device=payload.get("device", ""),
+                event=payload.get("event", ""),
+                t_created=payload.get("t_created"),
+                t_sync=payload.get("t_sync"),
+                thumb=payload.get("thumb", ""),
+                base_payload=payload,
+            )
+        return len(stale)
 
     def get_object(self, object_id: str, with_vectors: bool = True):
         """Mutable-shard point -> (payload, rows) or None."""
@@ -283,54 +337,82 @@ class Store:
                 return [np.asarray(r, dtype=np.float32) for r in recs[0].vector["exemplars"]]
         return []
 
+    def _query_leg(self, query, limit: int) -> tuple[list[Candidate], int]:
+        """One prefetch leg: run a query across both shards, dedup by id
+        (mutable wins), rank by score. Returns (candidates, engine_ns)."""
+        req = QueryRequest(query=query, limit=limit, with_payload=True, with_vector=False)
+        best: dict[str, Candidate] = {}
+        t0 = time.perf_counter_ns()
+        for shard, from_mut in [(self.mutable, True)] + (
+            [(self.immutable, False)] if self.immutable is not None else []
+        ):
+            for p in shard.query(req):
+                pid = str(p.id)
+                pl = p.payload or {}
+                if pl.get("kind", "object") != "object" or pl.get("synthetic"):
+                    continue  # blocklist entries and stunt synthetics never match labels
+                if pid not in best or p.score > best[pid].score:
+                    best[pid] = Candidate(
+                        pid, float(p.score), "object", pl.get("label", ""), pl, from_mut
+                    )
+        engine_ns = time.perf_counter_ns() - t0
+        return sorted(best.values(), key=lambda c: c.score, reverse=True), engine_ns
+
     def search_text(self, text: str, limit: int = 8) -> tuple[list[tuple[Candidate, bool]], float]:
-        """Hybrid label search. Lexical: BM25 sparse + substring (partial words).
-        Then dense expansion: the best hit's exemplars fan out over MAX_SIM to
-        surface visually similar memories (flagged similar=True). Returns
-        (results, engine_ms) — engine_ms is Edge query time only, the HUD number."""
+        """Hybrid label search, the Qdrant pattern: two prefetch legs — miniCOIL
+        sparse + dense text — fused with reciprocal-rank fusion (Edge 0.7.2
+        exports Prefetch/Fusion but doesn't consume them yet, so the RRF step
+        runs app-side; same math as the server's FusionQuery). A substring pass
+        catches half-typed words, and the best hit's exemplars fan out over
+        MAX_SIM to add visually similar memories (similar=True). Returns
+        (results, engine_ms) — engine_ms is Edge query time only."""
         text = text.strip()
         if not text:
             return [], 0.0
-        shards = [(self.mutable, True)] + (
-            [(self.immutable, False)] if self.immutable is not None else []
-        )
         engine_ns = 0
 
-        req = QueryRequest(
-            query=Query.Nearest(self._bm25.embed_query(text), using="label"),
-            limit=limit,
-            with_payload=True,
-            with_vector=False,
-        )
-        best: dict[str, Candidate] = {}
-        t0 = time.perf_counter_ns()
-        for shard, from_mut in shards:
-            for p in shard.query(req):
-                pid = str(p.id)
-                if pid not in best or p.score > best[pid].score:
-                    pl = p.payload or {}
-                    best[pid] = Candidate(
-                        pid,
-                        float(p.score),
-                        pl.get("kind", "object"),
-                        pl.get("label", ""),
-                        pl,
-                        from_mut,
-                    )
-        engine_ns += time.perf_counter_ns() - t0
+        legs: list[list[Candidate]] = []
+        if self.labels is not None:
+            sparse, dense = self.labels.embed_query(text)
+            leg, ns = self._query_leg(Query.Nearest(sparse, using="label"), 20)
+            legs.append(leg)
+            engine_ns += ns
+            leg, ns = self._query_leg(Query.Nearest(dense, using="label_dense"), 20)
+            # dense text similarity scores everything; keep semantic neighbors only
+            legs.append([c for c in leg if c.score >= DENSE_LABEL_FLOOR])
+            engine_ns += ns
+        else:  # model-free fallback: single BM25 leg
+            leg, ns = self._query_leg(
+                Query.Nearest(self._bm25.embed_query(text), using="label"), 20
+            )
+            legs.append(leg)
+            engine_ns += ns
 
-        # substring pass so half-typed words ("watc") still land — payload scan,
-        # fine at demo scale, never runs against the synthetic stunt shard
+        # reciprocal-rank fusion across the legs
+        fused: dict[str, float] = {}
+        by_id: dict[str, Candidate] = {}
+        for leg in legs:
+            for rank, cand in enumerate(leg):
+                fused[cand.id] = fused.get(cand.id, 0.0) + 1.0 / (RRF_K + rank + 1)
+                if cand.id not in by_id or cand.from_mutable:
+                    by_id[cand.id] = cand
+        top = max(fused.values(), default=1.0)
+        ranked = []
+        for pid, score in sorted(fused.items(), key=lambda kv: kv[1], reverse=True):
+            c = by_id[pid]
+            ranked.append(Candidate(c.id, score / top, c.kind, c.label, c.payload, c.from_mutable))
+
+        # substring pass so half-typed words ("watc") still land
         needle = text.lower()
         for pid, pl, from_mut in self.scroll_objects():
-            if pid not in best and needle in pl.get("label", "").lower():
-                best[pid] = Candidate(pid, 0.5, "object", pl.get("label", ""), pl, from_mut)
+            if pid not in fused and needle in pl.get("label", "").lower():
+                ranked.append(Candidate(pid, 0.3, "object", pl.get("label", ""), pl, from_mut))
+                fused[pid] = 0.3
 
-        lexical = sorted(best.values(), key=lambda c: c.score, reverse=True)
-        results: list[tuple[Candidate, bool]] = [(c, False) for c in lexical]
+        results: list[tuple[Candidate, bool]] = [(c, False) for c in ranked]
 
-        if lexical:  # dense expansion from the strongest lexical hit
-            rows = self.get_rows(lexical[0].id)
+        if ranked:  # visual expansion from the strongest fused hit
+            rows = self.get_rows(ranked[0].id)
             if rows:
                 probe = np.mean(rows, axis=0)
                 probe /= np.linalg.norm(probe) or 1.0
@@ -339,7 +421,7 @@ class Store:
                 engine_ns += time.perf_counter_ns() - t0
                 extra = 0
                 for cand in rec.candidates:
-                    if cand.id in best or cand.kind != "object" or cand.score < 0.45:
+                    if cand.id in fused or cand.kind != "object" or cand.score < 0.45:
                         continue
                     results.append((cand, True))
                     extra += 1

@@ -49,10 +49,16 @@ real teaching session), README demo-script rehearsal, second-laptop test.
   (cap 12) in the core; Teach/Dismiss on a dead (tid, epoch) hits the archive.
 - **Ignored items are curate-able**: blocklist entries show in inventory with
   thumbnails + per-vector prune; "unignore" = Forget on the blocklist point.
-- **Hybrid search** = BM25 sparse + substring pass, then dense visual
-  expansion from the top hit's exemplars (flagged "looks similar"). TRUE
-  text→dense hybrid is impossible: Unicom has no text tower (PLAN §3.3 final).
-  Search returns engine latency (ms) + per-object stats.
+- **Hybrid search (Dylan, "we're Qdrant")** = miniCOIL sparse + bge-small
+  dense over LABELS (`memory/labels.py`), two prefetch legs fused with RRF
+  (k=2, Qdrant's default). Edge 0.7.2 exports Prefetch/Fusion but doesn't
+  consume them, so the RRF step runs app-side. Substring pass for partial
+  words; dense visual expansion from the top hit ("looks similar"). Dense
+  leg floor 0.6 (bge scores everything). Fallback: no LabelEmbedder (gate,
+  sync tests) → on-device BM25, same sparse field. Schema: `label_dense`
+  384-d added; old shards migrate in place (`create_dense_vector`) and old
+  labels re-embed at boot (`label_v` marker). Note: label semantic search ≠
+  image-text search — Unicom still has no text tower (PLAN §3.3 final).
 - **Sightings**: core counts recognitions per object (`sightings`, `t_seen`
   payload on mutable objects, session-only for fleet ones). `upsert_object`
   takes `base_payload` so re-upserts don't wipe auxiliary payload keys —

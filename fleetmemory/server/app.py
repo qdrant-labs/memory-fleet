@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -49,6 +50,14 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
         hub.loop = asyncio.get_running_loop()
         app.state.core.start()
         app.state.pipeline.start()
+
+        # warm the label models off-thread so the first teach/search doesn't
+        # stall, then re-embed any pre-hybrid labels (shard ops via the core)
+        def warm_labels():
+            label_embedder.load()
+            app.state.core.submit(verbs.Call(fn=store.reembed_labels))
+
+        threading.Thread(target=warm_labels, name="labels-warm", daemon=True).start()
         if app.state.sync is not None:
             app.state.sync.start()
         yield
@@ -60,7 +69,12 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
 
     app = FastAPI(title="Fleet Memory", lifespan=lifespan)
 
-    store = Store(settings.data_dir, with_immutable=settings.fleet_enabled)
+    from fleetmemory.memory.labels import LabelEmbedder
+
+    label_embedder = LabelEmbedder()  # miniCOIL + dense; loads lazily, warmed at startup
+    store = Store(
+        settings.data_dir, with_immutable=settings.fleet_enabled, label_embedder=label_embedder
+    )
     core = verbs.Core(
         store,
         device_name=settings.device_name,
@@ -75,7 +89,12 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
         from fleetmemory.sync.client import FleetClient
         from fleetmemory.sync.manager import SyncManager
 
-        client = FleetClient(settings.qdrant_url, settings.qdrant_api_key, dim=store.dim)
+        client = FleetClient(
+            settings.qdrant_url,
+            settings.qdrant_api_key,
+            dim=store.dim,
+            label_embedder=label_embedder,
+        )
         sync = SyncManager(core, client, on_event=hub.broadcast)
 
     app.state.settings, app.state.store, app.state.core = settings, store, core
