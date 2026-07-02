@@ -34,6 +34,15 @@ stop and flag — don't silently patch.
 - Model weights: ultralytics auto-downloads `yoloe-11l-seg-pf.pt` to the repo
   root (gitignore it); fastembed caches under the system temp dir.
 - ONNX/torch runs: YOLOE on MPS, embedders per PLAN.md §9.2.
+- More Edge 0.7.2 quirks (found during the build): `EdgeShard.create` needs the
+  directory to already exist; `UpdateOperation.set_payload(payload=…,
+  point_ids=…)` is kwargs-only; `IsNullCondition` doesn't take `is_null=` (we
+  filter payloads in-process instead); `scroll` returns `(records, offset)`.
+- Ultralytics tracking needs `lap` pinned explicitly — we set
+  `YOLO_AUTOINSTALL=false` so it can't pip-install at runtime.
+- An empty Edge-created shard CAN seed straight from a partial snapshot
+  (manifest of empty shard → `partial/create` → `update_from_snapshot`), so
+  seed and pull share one code path — verified in `tests/sync/`.
 
 ## Working rules (repo-specific)
 
@@ -41,5 +50,6 @@ stop and flag — don't silently patch.
   user-visible string, doc, or commit.
 - Demo-first quality bar: what an audience sees in 3 minutes wins over
   completeness. No feature not in PLAN.md without asking Dylan.
-- Tests are in-tree and run in CI from the first phase (`tests/gate` must
-  stay fast and deterministic).
+- Tests are in-tree; no CI (cut 2026-07-01 — single-builder repo). Run lint +
+  `tests/gate` + `tests/sync` before every commit instead (`tests/gate` must
+  stay fast and deterministic; sync needs `make fleet-up`).

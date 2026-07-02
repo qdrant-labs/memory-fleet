@@ -230,10 +230,11 @@ measurement, not now.
   distinct items can't share a name; use distinct names). An earlier draft
   had a "fleet already knows a mug — merge or push anyway?" dialog; cut as
   over-engineering that second-guessed a decided policy.
-- **To verify on Dylan's cluster (5 min, before build):** Qdrant Cloud exposes
+- **✅ Verified on Dylan's Qdrant Cloud cluster (2026-07-01, v1.17.1):** both
   `GET /collections/{c}/shards/{id}/snapshot` and
-  `POST .../snapshot/partial/create` (works on OSS 1.18.2; expected on Cloud,
-  unverified). Fallback if restricted: Docker fleet for demos — no design change.
+  `POST .../snapshot/partial/create` work end-to-end into an Edge shard with
+  MAX_SIM intact (`docs/spikes/spike_sync_cloud.py`). Cloud is the primary
+  fleet target; Docker remains the offline fallback.
 
 ---
 
@@ -356,6 +357,10 @@ lint + the deterministic gate + the sync tests (random vectors + dockerized
 Qdrant — no model downloads); smoke and drive stay local `make` targets
 because they need the real models.
 
+> **Amendment (2026-07-01, Dylan):** GitHub Actions CI cut — single-builder
+> repo. The same suites (lint + gate + sync) run locally before every commit
+> instead; §6's dead-gate protection now lives in that commit ritual.
+
 ---
 
 ## 8. Build phases (each lands green with its tests)
@@ -457,8 +462,10 @@ does not predict live rates.** Same-pairs trust tracker id purity, and
 diff-pairs (coexisting only) cannot represent the "one object splits into two
 tracks over time" failure mode — the very case re-id must fix. Both biases
 apply equally to all five models (ranking robust), but absolute
-thresholds/rates must be re-measured on multi-angle clips of the real demo
-objects, where identity is human-verified (§11, 30-minute protocol rerun).
+thresholds/rates must be re-measured on domain-matched footage — handheld
+objects at webcam distance, identity human-verified (§11 defines the
+calibration protocol; the demo is open-world, so calibrate the domain, not
+specific objects).
 
 ### 9.3 Sync — Edge ↔ server round-trip ✅ PASSED
 Server 1.18.2 (Docker) ↔ qdrant-edge-py 0.7.2, with the §3.3 schema (MAX_SIM
@@ -517,12 +524,18 @@ Whichever wins, the subtitle does the rest of the work:
 ## 11. Risks & mitigations
 
 - **Instance discrimination is still the hard problem.** v1's ceiling was the
-  embedding, not the code. The spike picks the best available; if separation
-  stays mediocre on *your real demo objects*, the mitigations are: thresholds
-  tunable live, suggest-tier catches borderline cases with a human tap,
-  merge/name==identity recovers duplicates. **Before finalizing thresholds,
-  re-run the §9.2 protocol on webcam clips of the actual demo items** (script
-  is reusable; 30 minutes).
+  embedding, not the code. The spike picks the best available; the mitigations
+  are: thresholds tunable live, suggest-tier catches borderline cases with a
+  human tap, merge/name==identity recovers duplicates. **Threshold calibration
+  is per-DOMAIN, not per-object** — the demo is open-world (any person, venue,
+  object every time), so don't chase "the" demo items. What must match is the
+  *kind* of data: handheld personal items, webcam distance, masked crops.
+  Best source: a ~10-minute self-recorded webcam session with any assortment
+  of desk objects (conditions match exactly; extraction + benchmark scripts
+  are reusable as-is). Internet videos work as a supplement IF domain-matched
+  — unboxing/EDC/product-review footage where hands rotate objects at the
+  camera — NOT room-tour stock (that's the furniture domain §9.2 already
+  measured). The live sliders absorb residual venue-to-venue drift.
 - **Class-agnostic detectors propose everything** (wall art, shadows).
   Gates: box-area band, K-frame stability, ignore verb, per-track query cadence.
   If the unknowns queue is still spammy on real scenes, add an objectness/size
@@ -532,8 +545,8 @@ Whichever wins, the subtitle does the rest of the work:
 - **Two instances on one laptop** may contend for MPS. Plan A: second laptop
   at the booth. Plan B: one instance + relaunch-as-pull demo. Sizing measured
   in phase 2.
-- **Qdrant Cloud partial-snapshot availability** unverified (§3.6); the
-  Docker fleet server is a full fallback, zero design change.
+- ~~Qdrant Cloud partial-snapshot availability~~ — **resolved**: verified on
+  the real cluster (§3.6); Docker fleet server remains the offline fallback.
 - **Edge is beta** — pin `qdrant-edge-py==0.7.2`, keep the sync test as the
   canary when bumping.
 
