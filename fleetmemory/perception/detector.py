@@ -59,12 +59,14 @@ def is_person_like(class_name: str) -> bool:
 
 @dataclass(slots=True)
 class Proposal:
-    """One tracked region. No label — the detector has no say in what things are."""
+    """One tracked region. The detector's class name rides along as a teach-time
+    HINT only — names still enter memory exclusively through humans."""
 
     tid: int  # tracker id: continuity only, never identity
     conf: float
     box: tuple[float, float, float, float]  # (x1, y1, x2, y2) normalized
     mask: np.ndarray | None  # segmentation polygon, frame pixel coords
+    cls: str = ""  # YOLOE's guess, surfaced as a suggestion chip in the teach popover
 
 
 class Detector:
@@ -127,8 +129,9 @@ class Detector:
                 box = (x1 / w, y1 / h, x2 / w, y2 / h)
                 if not area_band_ok(box, self.max_area):
                     continue
-                if is_person_like(result.names.get(int(cls), "")):
+                cls_name = result.names.get(int(cls), "")
+                if is_person_like(cls_name):
                     continue
                 mask = polys[i] if polys is not None and i < len(polys) else None
-                proposals.append(Proposal(int(tid), float(cf), box, mask))
+                proposals.append(Proposal(int(tid), float(cf), box, mask, cls_name))
         return proposals, detect_ms

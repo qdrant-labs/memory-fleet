@@ -450,14 +450,24 @@ $("search").oninput = () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     const text = $("search").value.trim();
-    if (!text) {
-      S.searchHits = null; S.searchResults = null;
-      renderSearchResults(); drawMap();
-      if (S.drawerMode === "inventory") renderInventory();
-      return;
-    }
+    if (!text) { clearSearch(); return; }
     send({ cmd: "search", text });
   }, 220);
+};
+
+function clearSearch() {
+  $("search").value = "";
+  S.searchHits = null;
+  S.searchResults = null;
+  document.body.classList.remove("searching");
+  $("search-clear").classList.add("hidden");
+  renderSearchResults();
+  drawMap();
+}
+$("search-clear").onclick = clearSearch;
+// the collapsed LATEST MEMORIES bar doubles as a "back" button while searching
+document.querySelector("#memories-panel .panel-title").onclick = () => {
+  if (document.body.classList.contains("searching")) clearSearch();
 };
 
 function renderSearchResults() {
@@ -465,8 +475,12 @@ function renderSearchResults() {
   if (!S.searchResults || !S.searchResults.text) {
     box.innerHTML = "";
     $("search-ms").textContent = "miniCOIL + dense · RRF";
+    document.body.classList.remove("searching");
+    $("search-clear").classList.add("hidden");
     return;
   }
+  document.body.classList.add("searching");  // collapses LATEST MEMORIES
+  $("search-clear").classList.remove("hidden");
   const { hits, text, ms } = S.searchResults;
   $("search-ms").textContent = `${hits.length} hit${hits.length === 1 ? "" : "s"} · ${fmtMs(ms || 0)} on-device`;
   if (!hits.length) {
@@ -484,7 +498,16 @@ function renderSearchResults() {
       <span class="result-score"><i style="width:${Math.round((hd.score / max) * 100)}%"></i></span>
     </div>`).join("");
   box.querySelectorAll(".result-row").forEach((el) => {
-    el.onclick = () => { pulseMapNode(el.dataset.id); openDrawer("inventory"); };
+    el.onclick = () => {
+      // open the memory drawer with every stored representation of this object
+      pulseMapNode(el.dataset.id);
+      S.expanded = el.dataset.id;
+      openDrawer("inventory");
+      requestAnimationFrame(() => {
+        const row = document.querySelector(`#drawer-body .inv-item[data-id="${el.dataset.id}"]`);
+        if (row) row.scrollIntoView({ block: "center" });
+      });
+    };
   });
 }
 
@@ -522,7 +545,11 @@ function showPop(b, cx, cy) {
       <input type="text" id="teach-name" placeholder="or teach a new name…">
       <div class="pop-row"><button class="pop-btn" data-act="teach">teach</button></div>`;
   } else {
+    const hints = (b.hints || [])
+      .map((hd) => `<button class="hint-chip" data-hint="${esc(hd)}">${esc(hd)}</button>`)
+      .join("");
     html = `<h4>unknown — teach me</h4>
+      ${hints ? `<div class="hint-row">${hints}</div>` : ""}
       <input type="text" id="teach-name" placeholder="what is this?">
       <div class="pop-row">
         <button class="pop-btn" data-act="teach">teach</button>
@@ -535,7 +562,15 @@ function showPop(b, cx, cy) {
   pop.style.top = Math.min(cy, view.clientHeight - 170) + "px";
   const inp = $("teach-name");
   if (inp) { inp.focus(); inp.onkeydown = (ev) => { if (ev.key === "Enter") act("teach", t); }; }
-  pop.onclick = (ev) => { const a = ev.target.dataset && ev.target.dataset.act; if (a) act(a, t); };
+  pop.onclick = (ev) => {
+    const d = ev.target.dataset || {};
+    if (d.hint) {  // one-click teach with the detector's guess
+      const inp = $("teach-name");
+      if (inp) { inp.value = d.hint; act("teach", t); }
+      return;
+    }
+    if (d.act) act(d.act, t);
+  };
 }
 
 function act(a, t) {
@@ -670,7 +705,7 @@ function renderInventory() {
     html += objects.map((o) => invRow(o)).join("");
   }
   if (ignored.length) {
-    html += `<div class="section-head">ignored — blocklisted looks, never tracked</div>`;
+    html += `<div class="section-head">ignored — never tracked or asked about</div>`;
     html += ignored.map((o) => invRow(o)).join("");
   }
   body.innerHTML = html;
@@ -701,7 +736,7 @@ function renderInventory() {
       const actn = btn.dataset.act;
       if (actn === "forget" && confirm("forget this object?")) send({ cmd: "forget", object_id: id });
       if (actn === "unignore") send({ cmd: "forget", object_id: id });
-      if (actn === "ignore" && confirm("blocklist this object? it will never be tracked again"))
+      if (actn === "ignore" && confirm("ignore this object? it will never be tracked or asked about again"))
         send({ cmd: "ignore_object", object_id: id });
       if (actn === "rename") {
         const label = prompt("new name:");
@@ -713,7 +748,6 @@ function renderInventory() {
 }
 
 function invRow(o) {
-  const dimmed = S.searchHits && !S.searchHits.has(o.object_id);
   const badge = o.ignored
     ? `<span class="badge ignored">ignored</span>`
     : `<span class="badge ${o.local ? "" : "fleet"}">${o.local ? (o.pushed ? "pushed" : "local") : "fleet"}</span>`;
@@ -725,7 +759,7 @@ function invRow(o) {
          <button class="mini-btn" data-act="forget" title="forget">✕</button>`
       : "";
   return `
-    <div class="inv-item" data-id="${o.object_id}" style="${dimmed ? "opacity:.25" : ""}">
+    <div class="inv-item" data-id="${o.object_id}">
       ${o.local && !o.ignored ? `<input type="checkbox" class="inv-check" data-id="${o.object_id}"
         ${S.selected.has(o.object_id) ? "checked" : ""}>` : ""}
       <img class="inv-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">

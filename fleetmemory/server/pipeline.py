@@ -9,6 +9,7 @@ import logging
 import queue
 import threading
 import time
+from collections import Counter
 
 import cv2
 import numpy as np
@@ -97,6 +98,7 @@ class Pipeline:
         self.last_embed_ms = 0.0
         self._tick_times: list[float] = []
         self._last_perf = 0.0
+        self._cls_seen: dict[int, Counter] = {}  # tid -> detector class guesses
 
     # -- lifecycle --
 
@@ -196,6 +198,13 @@ class Pipeline:
         )
         for inc in died:
             self.core.submit(TrackDied(tid=inc.tid, epoch=inc.epoch))
+            self._cls_seen.pop(inc.tid, None)
+
+        # accumulate YOLOE's per-track class guesses (teach-popover hints —
+        # the class flickers frame to frame, so the top 3 are genuine options)
+        for p in props:
+            if p.cls:
+                self._cls_seen.setdefault(p.tid, Counter())[p.cls] += 1
 
         due = {i.tid: i.epoch for i in to_embed}
         jobs = []
@@ -220,6 +229,9 @@ class Pipeline:
                         "box": [round(v, 4) for v in p.box],
                         "conf": round(p.conf, 2),
                         "stability": self.scheduler.stability(p.tid),
+                        "hints": [
+                            c for c, _ in self._cls_seen.get(p.tid, Counter()).most_common(3)
+                        ],
                     }
                     for p in props
                 ],

@@ -78,7 +78,7 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
     )
     # the shards are core-thread-only, so _hello must not call store.count();
     # track the last known count from the event stream instead
-    app.state.mem_count = store.count()  # safe: core thread hasn't started yet
+    app.state.mem_count = store.vector_count()  # safe: core thread hasn't started yet
 
     def on_core_event(e: dict):
         if "memories" in e:

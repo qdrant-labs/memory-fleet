@@ -73,7 +73,7 @@ class Candidate:
 class RecognitionResult:
     candidates: list[Candidate]
     latency_ms: float
-    searched: int  # total points fanned out over
+    searched: int  # total exemplar vectors fanned out over
 
 
 class Store:
@@ -109,6 +109,8 @@ class Store:
             self._migrate_label_dense(self.mutable)
 
         self.scale = None  # optional stunt shard, attached on demand
+        self._vectors_dirty = True
+        self._vector_cache = 0
         self.immutable = None
         immut_dir = self.data_dir / "immutable"
         if immut_dir.exists():
@@ -170,7 +172,7 @@ class Store:
                     from_mutable=from_mut,
                 )
         cands = sorted(best.values(), key=lambda c: c.score, reverse=True)
-        return RecognitionResult(cands, latency_ms, self.count())
+        return RecognitionResult(cands, latency_ms, self.vector_count())
 
     def count(self) -> int:
         n = self.mutable.count(CountRequest())
@@ -179,6 +181,30 @@ class Store:
         if self.scale is not None:
             n += self.scale.count(CountRequest())
         return n
+
+    def vector_count(self) -> int:
+        """Total exemplar VECTORS in memory — the honest HUD number: an object
+        with 12 views is 12 memories, not one. Recomputed lazily after
+        mutations (payload scroll, cheap at demo scale); the stunt shard
+        contributes 3 rows per point by construction (§9.4), no scroll."""
+        if self._vectors_dirty:
+            n = 0
+            for shard in [self.mutable] + ([self.immutable] if self.immutable else []):
+                offset = None
+                while True:
+                    recs, offset = shard.scroll(
+                        ScrollRequest(
+                            limit=256, offset=offset, with_payload=True, with_vector=False
+                        )
+                    )
+                    for r in recs:
+                        n += len((r.payload or {}).get("views") or []) or 1
+                    if offset is None:
+                        break
+            self._vector_cache = n
+            self._vectors_dirty = False
+        scale_rows = 3 * self.scale.count(CountRequest()) if self.scale is not None else 0
+        return self._vector_cache + scale_rows
 
     # ---------- mutable-shard writes (local teachings + blocklist) ----------
 
@@ -231,6 +257,7 @@ class Store:
         self.mutable.update(
             UpdateOperation.upsert_points([Point(id=object_id, vector=vector, payload=payload)])
         )
+        self._vectors_dirty = True
 
     def reembed_labels(self) -> int:
         """One-shot migration: points taught before hybrid search carry
@@ -275,6 +302,7 @@ class Store:
 
     def delete(self, object_id: str):
         self.mutable.update(UpdateOperation.delete_points([object_id]))
+        self._vectors_dirty = True
 
     def set_payload(self, object_id: str, payload: dict):
         self.mutable.update(UpdateOperation.set_payload(payload=payload, point_ids=[object_id]))
@@ -471,6 +499,7 @@ class Store:
         shutil.rmtree(immut_dir, ignore_errors=True)
         immut_dir.mkdir(parents=True)
         self.immutable = EdgeShard.create(str(immut_dir), shard_config(self.dim))
+        self._vectors_dirty = True
 
     def apply_partial_snapshot(self, snapshot_path: str | Path) -> bool:
         """Apply a partial snapshot to the mirror. Returns False for an empty
@@ -485,6 +514,7 @@ class Store:
             if not any(m.name.startswith("segments") for m in tar):
                 return False
         self.immutable.update_from_snapshot(str(snapshot_path))
+        self._vectors_dirty = True
         return True
 
     def dedup_after_pull(self) -> list[str]:
@@ -511,6 +541,7 @@ class Store:
         doomed = [pid for pid in pushed if pid in mirrored]
         if doomed:
             self.mutable.update(UpdateOperation.delete_points(doomed))
+            self._vectors_dirty = True
         return doomed
 
 

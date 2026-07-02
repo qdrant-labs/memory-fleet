@@ -30,6 +30,7 @@ NEG_CAP = 8
 BURST_VIEWS = 6  # teach burst: capture until this many views...
 BURST_SECONDS = 3.0  # ...or this much time
 ARCHIVE_CAP = 12  # departed unknowns kept teachable (wrist goes down, watch stays)
+IGNORE_FOLD = 0.55  # ignoring something this close to a blocklist entry grows that entry
 
 
 def _push_fingerprint(payload: dict) -> tuple:
@@ -393,6 +394,7 @@ class Core:
             payload.get("label", ""),
             rows,
             views,
+            kind=payload.get("kind", "object"),  # blocklist entries accrete too
             neg=payload.get("neg"),
             device=payload.get("device", ""),
             event=payload.get("event", ""),
@@ -505,17 +507,27 @@ class Core:
         ts = self.tracks[m.tid]
         if ts.last_vec is None:
             return
-        view_id = uuid.uuid4().hex[:12]
-        self._save_view_thumb(view_id, ts.last_thumb)
-        self.store.upsert_object(
-            new_id(),
-            "",
-            [ts.last_vec],
-            [{"view_id": view_id, "human": True}],
-            kind="ignored",
-            device=self.device_name,
-            thumb=base64.b64encode(ts.last_thumb).decode() if ts.last_thumb else "",
-        )
+        # fold into the nearest existing blocklist entry when it's plausibly the
+        # same thing: hair and other shape-shifters need MANY views before the
+        # strict suppress threshold covers them — each ignore strengthens ONE
+        # entry instead of littering the blocklist with near-duplicates
+        res = self.store.recognize(ts.last_vec)
+        nearest = next((c for c in res.candidates if c.kind == "ignored"), None)
+        if nearest is not None and nearest.from_mutable and nearest.score >= IGNORE_FOLD:
+            fake = Ingest(m.tid, m.epoch, ts.last_vec, ts.last_thumb, ts.last_quality, ts.last_seen)
+            self._maybe_accrete(nearest.id, fake, human=True)
+        else:
+            view_id = uuid.uuid4().hex[:12]
+            self._save_view_thumb(view_id, ts.last_thumb)
+            self.store.upsert_object(
+                new_id(),
+                "",
+                [ts.last_vec],
+                [{"view_id": view_id, "human": True}],
+                kind="ignored",
+                device=self.device_name,
+                thumb=base64.b64encode(ts.last_thumb).decode() if ts.last_thumb else "",
+            )
         ts.state, ts.object_id, ts.label, ts.score = "ignored", None, "", 1.0
         self._track_event(m.tid, ts)
         self._emit_stats()
@@ -921,7 +933,7 @@ class Core:
         self._emit(
             {
                 "type": "stats",
-                "memories": self.store.count(),
+                "memories": self.store.vector_count(),
                 "fleet": self.store.immutable is not None,
             }
         )
