@@ -1,4 +1,4 @@
-"""Build the prebuilt 100k-memory stunt shard.
+"""Build the stunt shard: 100k points x 3 exemplar rows = 300k vectors.
 
 Synthetic points carry synthetic:true (inventory/map exclude them), ~3 exemplar
 rows each, no thumbnails. Building takes ~1 min — that is exactly why it is

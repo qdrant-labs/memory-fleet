@@ -71,8 +71,8 @@ Requirements: macOS on Apple Silicon, Python 3.12,
 
 ```bash
 git clone <repo-url> && cd fleet-memory
-make setup          # first run downloads model weights (~500 MB total)
-make run            # http://127.0.0.1:8765
+make setup          # install dependencies
+make run            # http://127.0.0.1:8765 (first run downloads ~500 MB of model weights)
 ```
 
 Fleet sync is optional. Without a `.env`, the app runs fully local:
@@ -94,6 +94,15 @@ make run-b
 Scale stunt: `make demo-scale` builds a synthetic shard of 300k vectors; press
 `S` in the UI to attach it live and watch recognition latency barely move.
 `make reset` wipes local memory.
+
+Porting beyond a laptop (ballpark, not measured on this app):
+
+- **Minimum:** 4-core CPU, 8 GB RAM, GTX 1650-class GPU, at a reduced
+  detection rate (tunable live, 2-15 per second).
+- **Recommended:** 16 GB RAM, RTX 3060 or Jetson Orin NX class.
+
+Detection is the only heavy workload; on Nvidia hardware it needs a one-line
+device change in `perception/detector.py`.
 
 ## Applications
 

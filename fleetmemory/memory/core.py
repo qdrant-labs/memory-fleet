@@ -264,16 +264,6 @@ class Core:
         if self._thread:
             self._thread.join(timeout=5)
 
-    def drain(self):
-        """Synchronously process everything queued — the deterministic gate's clock."""
-        while True:
-            try:
-                msg = self._queue.get_nowait()
-            except queue.Empty:
-                return
-            if msg is not None:
-                self._process(msg)
-
     def _run(self):
         while not self._stop.is_set():
             msg = self._queue.get()

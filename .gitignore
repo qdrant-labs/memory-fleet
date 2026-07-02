@@ -16,3 +16,9 @@ edge-data*/
 
 # os
 .DS_Store
+
+# local working notes (not shipped)
+CLAUDE.md
+
+# local test harness (not shipped)
+tests/

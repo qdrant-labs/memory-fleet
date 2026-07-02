@@ -1,8 +1,8 @@
 """Neural label embeddings for hybrid search: miniCOIL sparse + dense text.
 
-fastembed lives in the perception extra, so this loads lazily: the
-deterministic gate and CI-style sync tests never construct a LabelEmbedder
-and Store falls back to on-device BM25 (same sparse field, IDF modifier).
+fastembed lives in the perception extra, so this loads lazily. Without a
+LabelEmbedder, Store falls back to on-device BM25 (same sparse field, IDF
+modifier).
 """
 
 from qdrant_edge import SparseVector

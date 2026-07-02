@@ -35,7 +35,7 @@ from qdrant_edge import (
     UpdateOperation,
 )
 
-DIM = 512  # Unicom-ViT-B-32; tests use smaller dims via the dim argument
+DIM = 512  # Unicom-ViT-B-32; the dim argument lets tools build small scratch shards
 LABEL_DENSE_DIM = 384  # bge-small-en-v1.5 (labels.py); field exists even in BM25 fallback
 RRF_K = 2  # Qdrant's reciprocal-rank-fusion default
 DENSE_LABEL_FLOOR = 0.6  # bge cosine below this is noise, not a semantic neighbor
@@ -89,7 +89,7 @@ class Store:
         self.data_dir = Path(data_dir)
         self._bm25 = Bm25(Bm25Config())
         # miniCOIL + dense (labels.LabelEmbedder) when models are available;
-        # None -> BM25-only fallback (deterministic gate, CI-style sync tests)
+        # None -> on-device BM25 fallback over the same sparse field
         self.labels = label_embedder
 
         mut_dir = self.data_dir / "mutable"
