@@ -1,8 +1,8 @@
-"""Class-agnostic object proposals + tracking (PLAN.md §9.1: YOLOE-11L prompt-free).
+"""Class-agnostic object proposals + tracking (YOLOE-11L, prompt-free).
 
 The detector's built-in vocabulary drives detection; its labels are discarded.
 Names come from vector search only. Tracking (BoT-SORT via ultralytics) gives
-frame-to-frame continuity — never identity (PLAN.md §12.5).
+frame-to-frame continuity — never identity.
 """
 
 import logging
@@ -16,9 +16,9 @@ import numpy as np
 os.environ.setdefault("YOLO_AUTOINSTALL", "false")  # no pip calls at runtime
 
 try:
-    # torch-MPS autoreleases Metal objects per inference; a pure Python loop never
-    # drains the pool, leaking ~80 MB/min live. Wrap every model call (measured
-    # fix: docs/spikes/spike_mps_leak.py).
+    # torch-MPS autoreleases Metal objects per inference; a pure-Python loop
+    # never drains the pool, leaking ~80 MB/min. Every model call must run
+    # inside this pool so the objects are released each iteration.
     from objc import autorelease_pool
 except ImportError:  # non-macOS: nothing to drain
     from contextlib import nullcontext as autorelease_pool
@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 WEIGHTS = "yoloe-11l-seg-pf.pt"  # auto-downloads to repo root (gitignored)
 IMGSZ = 640
 MAX_DET = 64
-DEFAULT_CONF = 0.30  # spike used 0.25; expected to tune up on live webcam scenes
+DEFAULT_CONF = 0.30  # tuned for live webcam scenes; live-tunable in the UI
 # Normalized box-area band: drops speck noise and oversized phantom regions.
-# Spike used 0.55 max (room scenes); live desk demos propose empty quarter-screen
-# blobs, so the cap is tightened to hand-held scale (Dylan, 2026-07-01).
+# Live desk scenes produce empty quarter-screen phantom proposals; demo objects
+# are hand-held scale, so the area cap stays tight.
 MIN_AREA, MAX_AREA = 0.0008, 0.20
 
 
@@ -41,15 +41,21 @@ def area_band_ok(box: tuple[float, float, float, float], max_area: float = MAX_A
     return MIN_AREA <= area <= max_area
 
 
-# People and body parts are suppressed at the proposal level (Dylan, 2026-07-01):
-# hands and faces must not flood the unknowns queue. This is the ONE use of the
-# detector's class names in the app — object names still come from vector search.
+# People and body parts are suppressed at the proposal level: hands and faces
+# must not flood the unknowns queue. This is the ONE use of the detector's class
+# names in the app — object names still come from vector search.
 PERSON_WORDS = frozenset(
     "person people man men woman women boy girl child kid baby human humans face "
     "faces head hair ear eye eyes nose mouth lip lips chin cheek forehead beard "
     "mustache moustache neck shoulder arm arms elbow wrist hand hands finger "
     "fingers thumb fist chest torso waist hip leg legs knee ankle foot feet toe "
-    "toes skin body".split()
+    "toes skin body "
+    # hair/face vocabulary the model actually emits for people (its classifier
+    # flickers between these and the plain words frame to frame)
+    "wig ponytail braid bangs afro dreadlock dreadlocks mane haircut hairstyle "
+    "eyebrow eyebrows eyelash eyelashes lash lashes freckle freckles jaw scalp "
+    "sideburn sideburns goatee tongue tooth teeth throat nostril manicure "
+    "businessman fisherman fireman airman craftsman".split()
 )
 
 
@@ -77,6 +83,10 @@ class Detector:
         self.device = None
         self.conf = conf  # live-tunable
         self.max_area = MAX_AREA  # live-tunable: biggest proposal kept, frame fraction
+        # Person suppression is sticky per track: the classifier flickers (a hair
+        # patch reads "hair" one frame, "wig" or "fur" the next), so a track that
+        # has EVER looked person-like stays suppressed for its lifetime.
+        self._person_tids: set[int] = set()
 
     def load(self):
         if self.model is not None:
@@ -100,6 +110,7 @@ class Detector:
         predictor = getattr(self.model, "predictor", None)
         for tracker in getattr(predictor, "trackers", None) or []:
             tracker.reset()
+        self._person_tids.clear()
 
     def track(self, frame_bgr: np.ndarray) -> tuple[list[Proposal], float]:
         """Detect + track one frame. Returns (proposals, detect_ms)."""
@@ -127,11 +138,19 @@ class Detector:
             for i, (tid, cls, cf, xyxy) in enumerate(quads):
                 x1, y1, x2, y2 = (float(v) for v in xyxy)
                 box = (x1 / w, y1 / h, x2 / w, y2 / h)
+                # person check runs before the area band so an oversized face box
+                # still poisons its track id for later, smaller frames
+                tid = int(tid)
+                cls_name = result.names.get(int(cls), "")
+                if tid in self._person_tids:
+                    continue
+                if is_person_like(cls_name):
+                    self._person_tids.add(tid)
+                    continue
                 if not area_band_ok(box, self.max_area):
                     continue
-                cls_name = result.names.get(int(cls), "")
-                if is_person_like(cls_name):
-                    continue
                 mask = polys[i] if polys is not None and i < len(polys) else None
-                proposals.append(Proposal(int(tid), float(cf), box, mask, cls_name))
+                proposals.append(Proposal(tid, float(cf), box, mask, cls_name))
+        if len(self._person_tids) > 4096:  # ids only grow; keep the recent flags
+            self._person_tids = set(sorted(self._person_tids)[-1024:])
         return proposals, detect_ms

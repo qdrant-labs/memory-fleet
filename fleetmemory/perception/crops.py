@@ -1,9 +1,7 @@
-"""Masked crops for embedding — v1's exact crop path (PLAN.md §2).
+"""Masked crops for embedding.
 
-The embedding benchmark (§9.2) measured separations through this code; the
-mask fill (background flattened to neutral gray inside the segmentation
+The mask fill (background flattened to neutral gray inside the segmentation
 polygon) is what makes recognition survive background and hand changes.
-Keep in lockstep with docs/spikes — thresholds were derived through it.
 """
 
 import cv2

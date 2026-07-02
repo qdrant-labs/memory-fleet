@@ -1,9 +1,9 @@
-"""Embed scheduling: which tracks get embedded this tick (PLAN.md §3.4, §8 phase 2).
+"""Embed scheduling: which tracks get embedded this tick.
 
 Pure logic, no models — the budget closes because we embed new/stale stable
 tracks only, never all proposals every frame. Also the home of incarnation
-epochs (§3.2): a tracker id that dies and later reappears is a NEW incarnation;
-the core drops stale messages by (tid, epoch) mismatch.
+epochs: a tracker id that dies and later reappears is a NEW incarnation; the
+core drops stale messages by (tid, epoch) mismatch.
 """
 
 from dataclasses import dataclass

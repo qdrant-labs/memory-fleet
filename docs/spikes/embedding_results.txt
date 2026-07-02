@@ -1,9 +1,0 @@
-[transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
-1248 crops | 126 tracks | 5987 same-pairs, 5103 diff-pairs (585 hard same-class)
-siglip2-base (v1)        dim= 768    30.2 ms | AUC 0.951 (hard 0.841) | same med 0.931 p10 0.836 | diff p99 0.947 hard p99 0.966 | R@1%FMR 0.36 hard 0.15
-clip-ViT-B-32-vision     dim= 512     7.5 ms | AUC 0.923 (hard 0.832) | same med 0.929 p10 0.835 | diff p99 0.947 hard p99 0.963 | R@1%FMR 0.34 hard 0.18
-Unicom-ViT-B-32          dim= 512     7.4 ms | AUC 0.951 (hard 0.856) | same med 0.789 p10 0.469 | diff p99 0.832 hard p99 0.891 | R@1%FMR 0.39 hard 0.20
-Unicom-ViT-B-16          dim= 768    26.9 ms | AUC 0.951 (hard 0.851) | same med 0.746 p10 0.436 | diff p99 0.800 hard p99 0.881 | R@1%FMR 0.37 hard 0.14
-Loading weights:   0%|          | 0/223 [00:00<?, ?it/s]Loading weights: 100%|██████████| 223/223 [00:00<00:00, 10448.98it/s]
-dinov2-small             dim= 384     4.3 ms | AUC 0.947 (hard 0.830) | same med 0.772 p10 0.446 | diff p99 0.843 hard p99 0.901 | R@1%FMR 0.32 hard 0.14
-saved -> /private/tmp/claude-501/-Users-dylanc-Documents-GitHub-edge-mission-control/6fc1a570-5169-4dc9-b832-bea5a4c00712/scratchpad/crops/bench_results.json

@@ -59,8 +59,8 @@ const handlers = {
     send({ cmd: "map" });
   },
   frame(m) {
-    // live: video-only frames at ~24 fps (boxes arrive separately at ~8 Hz and
-    // the rAF loop interpolates); drive mode still sends boxes on the frame
+    // video-only frames at ~24 fps (boxes arrive separately at ~8 Hz and the
+    // rAF loop interpolates); a frame may still carry boxes, applied if present
     const seq = ++S.frameSeq;
     const img = new Image();
     img.onload = () => { if (seq >= S.shownSeq) { S.shownSeq = seq; S.frame = img; S.dirty = true; } };

@@ -1,5 +1,0 @@
-24 frames sampled on mps
-fastsam-s          45 ms/frame (p90 61) | proposals/frame med 50 (min 24, max 62)
-fastsam-x          62 ms/frame (p90 80) | proposals/frame med 54 (min 20, max 63)
-yoloe-11l-pf       87 ms/frame (p90 137) | proposals/frame med 22 (min 5, max 42)
-yoloe-11s-pf       83 ms/frame (p90 92) | proposals/frame med 18 (min 6, max 34)

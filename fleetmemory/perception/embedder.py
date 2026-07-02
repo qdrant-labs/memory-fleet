@@ -1,6 +1,6 @@
-"""On-device instance embeddings (PLAN.md §9.2: Unicom-ViT-B-32 via fastembed, ONNX CPU).
+"""On-device instance embeddings (Unicom-ViT-B-32 via fastembed, ONNX CPU).
 
-CPU on purpose — the detector owns MPS. 512-d, ~7.4 ms/crop measured.
+CPU on purpose — the detector owns MPS. 512-d, ~7.4 ms/crop.
 """
 
 import numpy as np

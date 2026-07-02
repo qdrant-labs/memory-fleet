@@ -1,6 +1,6 @@
-"""Pre-stage ritual (PLAN.md §4): verify every model loads from LOCAL CACHE with
-networking disabled — a first-run download at a venue is a classic demo killer.
-Run via `make demo-check` (which also runs smoke + drive + sync tests).
+"""Pre-stage ritual: verify every model loads from LOCAL CACHE with networking
+disabled — a first-run download at a venue is a classic demo killer.
+Run via `make demo-check`.
 """
 
 import os

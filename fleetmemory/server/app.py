@@ -1,5 +1,5 @@
-"""FastAPI + one WebSocket (PLAN.md §3.1). Serializes UI commands into the
-core's queue, broadcasts core events + frames. No logic here."""
+"""FastAPI + one WebSocket. Serializes UI commands into the core's queue,
+broadcasts core events + frames. No logic here."""
 
 import asyncio
 import contextlib
@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fleetmemory.config import Settings
 from fleetmemory.memory import core as verbs
 from fleetmemory.memory.store import Store
-from fleetmemory.server.pipeline import CameraSource, DriveSource, Pipeline
+from fleetmemory.server.pipeline import CameraSource, Pipeline
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
@@ -43,7 +43,7 @@ class Hub:
                 q.put_nowait(event)
 
 
-def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
+def create_app(settings: Settings) -> FastAPI:
     hub = Hub()
 
     @contextlib.asynccontextmanager
@@ -52,11 +52,9 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
         app.state.core.start()
         app.state.pipeline.start()
 
-        # warm the label models off-thread so the first teach/search doesn't
-        # stall, then re-embed any pre-hybrid labels (shard ops via the core)
+        # warm the label models off-thread so the first teach/search doesn't stall
         def warm_labels():
             label_embedder.load()
-            app.state.core.submit(verbs.Call(fn=store.reembed_labels))
 
         threading.Thread(target=warm_labels, name="labels-warm", daemon=True).start()
         if app.state.sync is not None:
@@ -76,7 +74,7 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
     store = Store(
         settings.data_dir, with_immutable=settings.fleet_enabled, label_embedder=label_embedder
     )
-    # the shards are core-thread-only, so _hello must not call store.count();
+    # the shards are core-thread-only, so _hello must not call into the store;
     # track the last known count from the event stream instead
     app.state.mem_count = store.vector_count()  # safe: core thread hasn't started yet
 
@@ -94,8 +92,8 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
         event_tag=settings.event_tag,
         on_event=on_core_event,
     )
-    source = DriveSource() if drive_mode else CameraSource(0)
-    pipeline = Pipeline(core, source, hub.broadcast, drive_mode=drive_mode)
+    source = CameraSource(0)
+    pipeline = Pipeline(core, source, hub.broadcast)
 
     sync = None
     if settings.fleet_enabled:
@@ -181,12 +179,6 @@ def _hello(app) -> dict:
 def _dispatch(app, m: dict):
     core, pipeline = app.state.core, app.state.pipeline
     cmd = m.get("cmd")
-    if cmd == "frame":  # drive mode: recorded frames over the wire (tests/drive)
-        if isinstance(pipeline.source, DriveSource):
-            import base64
-
-            pipeline.source.push(base64.b64decode(m["jpg"]))
-        return
     if cmd == "conf":
         pipeline.detector.conf = float(m["value"])
         return

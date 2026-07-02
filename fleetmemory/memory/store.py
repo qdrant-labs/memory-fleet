@@ -1,10 +1,9 @@
-"""Two-shard Edge storage (PLAN.md §3.3): mutable (local teachings) + immutable
-(fleet mirror, snapshot-fed). Recognition fans out to both, merged, deduped by
-point id — mutable wins ties. The shard is the source of truth for vectors;
-nothing here caches them (PLAN.md §12.3).
+"""Two-shard Edge storage: mutable (local teachings) + immutable (fleet mirror,
+snapshot-fed). Recognition fans out to both, merged, deduped by point id —
+mutable wins ties. The shard is the source of truth for vectors; nothing here
+caches them.
 """
 
-import contextlib
 import shutil
 import tarfile
 import time
@@ -105,8 +104,6 @@ class Store:
             self.mutable.update(
                 UpdateOperation.create_field_index("kind", PayloadSchemaType.Keyword)
             )
-        else:
-            self._migrate_label_dense(self.mutable)
 
         self.scale = None  # optional stunt shard, attached on demand
         self._vectors_dirty = True
@@ -115,19 +112,9 @@ class Store:
         immut_dir = self.data_dir / "immutable"
         if immut_dir.exists():
             self.immutable = EdgeShard.load(str(immut_dir))
-            self._migrate_label_dense(self.immutable)
         elif with_immutable:
             immut_dir.mkdir(parents=True)
             self.immutable = EdgeShard.create(str(immut_dir), shard_config(dim))
-
-    @staticmethod
-    def _migrate_label_dense(shard: EdgeShard):
-        """Shards created before the hybrid-search schema gain label_dense in
-        place (verified on Edge 0.7.2; no-op error when it already exists)."""
-        with contextlib.suppress(Exception):
-            shard.update(
-                UpdateOperation.create_dense_vector("label_dense", LABEL_DENSE_DIM, Distance.Cosine)
-            )
 
     def close(self):
         self.mutable.close()
@@ -174,19 +161,11 @@ class Store:
         cands = sorted(best.values(), key=lambda c: c.score, reverse=True)
         return RecognitionResult(cands, latency_ms, self.vector_count())
 
-    def count(self) -> int:
-        n = self.mutable.count(CountRequest())
-        if self.immutable is not None:
-            n += self.immutable.count(CountRequest())
-        if self.scale is not None:
-            n += self.scale.count(CountRequest())
-        return n
-
     def vector_count(self) -> int:
         """Total exemplar VECTORS in memory — the honest HUD number: an object
         with 12 views is 12 memories, not one. Recomputed lazily after
         mutations (payload scroll, cheap at demo scale); the stunt shard
-        contributes 3 rows per point by construction (§9.4), no scroll."""
+        contributes 3 rows per point by construction, no scroll."""
         if self._vectors_dirty:
             n = 0
             for shard in [self.mutable] + ([self.immutable] if self.immutable else []):
@@ -251,43 +230,12 @@ class Store:
             sparse, dense = self.labels.embed_doc(label)
             vector["label"] = sparse
             vector["label_dense"] = dense
-            payload["label_v"] = 2  # hybrid-era label vectors (miniCOIL + dense)
         else:
             vector["label"] = self._bm25.embed_document(label or " ")
         self.mutable.update(
             UpdateOperation.upsert_points([Point(id=object_id, vector=vector, payload=payload)])
         )
         self._vectors_dirty = True
-
-    def reembed_labels(self) -> int:
-        """One-shot migration: points taught before hybrid search carry
-        BM25-space label vectors that miniCOIL/dense queries can't see.
-        Re-embed them in place. Idempotent (label_v marker); mutable only —
-        the mirror re-fills from fleet pushes. Call on the core thread."""
-        if self.labels is None:
-            return 0
-        stale = []
-        for kind in ("object", "ignored"):
-            for pid, pl, _ in self.scroll_objects(kind=kind, mutable_only=True):
-                if pl.get("label_v") != 2:
-                    stale.append(pid)
-        for pid in stale:
-            payload, rows = self.get_object(pid)
-            self.upsert_object(
-                pid,
-                payload.get("label", ""),
-                rows,
-                list(payload.get("views") or []),
-                kind=payload.get("kind", "object"),
-                neg=payload.get("neg"),
-                device=payload.get("device", ""),
-                event=payload.get("event", ""),
-                t_created=payload.get("t_created"),
-                t_sync=payload.get("t_sync"),
-                thumb=payload.get("thumb", ""),
-                base_payload=payload,
-            )
-        return len(stale)
 
     def get_object(self, object_id: str, with_vectors: bool = True):
         """Mutable-shard point -> (payload, rows) or None."""
@@ -302,7 +250,7 @@ class Store:
 
     def get_object_from_mirror(self, object_id: str):
         """Fleet-mirror point -> (payload, rows) or None. Read-only source for
-        copy-on-write hydration (core._hydrate_fleet_object)."""
+        copy-on-write hydration (core._maybe_accrete)."""
         if self.immutable is None:
             return None
         recs = self.immutable.retrieve([object_id], with_payload=True, with_vector=True)
@@ -345,12 +293,6 @@ class Store:
                 if offset is None:
                     break
         return out
-
-    def find_label(self, label: str) -> str | None:
-        """Identity == label: A mutable object currently carrying this label
-        (there may be several sibling buckets; this returns the first)."""
-        pids = self.find_label_points(label)
-        return pids[0][0] if pids else None
 
     def find_label_points(self, label: str, mutable_only: bool = True) -> list[tuple[str, dict]]:
         """Points carrying this label — identity is the LABEL; points are
@@ -493,7 +435,7 @@ class Store:
                         break
         return results[:limit], engine_ns / 1e6
 
-    # ---------- scale stunt (PLAN.md §4 step 4) ----------
+    # ---------- scale stunt ----------
 
     def attach_scale_shard(self, path: str | Path) -> bool:
         """Fan recognition out over a prebuilt synthetic shard ("a year of robot
@@ -510,7 +452,7 @@ class Store:
             self.scale.close()
             self.scale = None
 
-    # ---------- sync support (PLAN.md §3.3 dedup rule) ----------
+    # ---------- sync support (id-present dedup rule) ----------
 
     def reset_immutable(self):
         """The mirror is a disposable replica of the fleet — on damage, rebuild

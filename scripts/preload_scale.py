@@ -1,8 +1,8 @@
-"""Build the prebuilt 100k-memory stunt shard (PLAN.md §4 step 4, §9.4).
+"""Build the prebuilt 100k-memory stunt shard.
 
 Synthetic points carry synthetic:true (inventory/map exclude them), ~3 exemplar
-rows each (§9.4's honest ratio), no thumbnails. Building takes ~1 min — that is
-exactly why it is prebuilt and swapped in on a keypress, never built on stage.
+rows each, no thumbnails. Building takes ~1 min — that is exactly why it is
+prebuilt and swapped in on a keypress, never built on stage.
 
   uv run python scripts/preload_scale.py [--points 100000] [--dest edge-data-scale]
 """

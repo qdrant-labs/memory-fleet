@@ -1,6 +1,5 @@
-"""Fleet client (PLAN.md §3.6): qdrant-client for curated push, raw snapshot
-endpoints for pull. Works against Qdrant Cloud (primary) or the bundled Docker
-fleet — same code path, verified in the §9.3/§3.6 spikes.
+"""Fleet client: qdrant-client for curated push, raw snapshot endpoints for
+pull. Runs against a Qdrant Cloud cluster (the shared fleet).
 """
 
 import logging

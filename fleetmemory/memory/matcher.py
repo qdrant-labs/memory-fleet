@@ -1,8 +1,8 @@
-"""Two-tier matching decision (PLAN.md §3.4).
+"""Two-tier matching decision.
 
-Pure: candidates in, decision out. The negative-exemplar veto and the
-human-provenance bonus are the WHOLE rerank — no color signatures, no class
-gates (they patched detector-label problems that no longer exist).
+Pure: candidates in, decision out. The rerank is exactly two rules — a
+negative-exemplar veto (a "not me" vector that explains the query better than
+the match vetoes it) and a small human-provenance bonus at the margin.
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ import numpy as np
 
 from .store import Candidate
 
-# Measured operating points (§9.2), live-tunable in the UI.
+# Default operating points, live-tunable in the UI.
 S_SAME = 0.80
 S_SUGGEST = 0.55
 S_IGNORE = 0.90
@@ -19,7 +19,7 @@ HUMAN_BONUS = 0.02  # a human-vouched view is worth a nudge at the margin
 # Soft suppression: a look this close to an ignored entry is hidden too —
 # UNLESS memory has a better idea (a taught object outranking it wins).
 # Keeps ignored doors/hair from re-flooding the unknowns queue while staying
-# visible as a faint box, one click from rescue (§2 asymmetric suppression).
+# visible as a faint box, one click from rescue (asymmetric suppression).
 S_IGNORE_SOFT = 0.65
 
 

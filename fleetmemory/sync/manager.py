@@ -1,6 +1,6 @@
-"""Sync lifecycle (PLAN.md §3.6): pull every ~30 s (or on demand), push only
-from curation. Downloads happen on this worker; shard mutations happen as
-queued core messages. Sync failures degrade to "fleet offline", never crash.
+"""Sync lifecycle: pull every ~30 s (or on demand), push only from curation.
+Downloads happen on this worker; shard mutations happen as queued core
+messages. Sync failures degrade to "fleet offline", never crash.
 """
 
 import logging
@@ -117,7 +117,8 @@ class SyncManager:
             return  # no immutable mirror (local mode)
         # The core owns the snapshot file from the moment it's submitted — it
         # deletes it after applying. Never tie the file's lifetime to a timeout
-        # here: a busy core (first boot) had the temp dir yanked mid-unpack.
+        # here: a busy core (first boot) can outlast it and get the temp dir
+        # yanked mid-unpack.
         workdir = Path(tempfile.mkdtemp(prefix="fm-pull-"))
         try:
             dest = workdir / "partial.snapshot"

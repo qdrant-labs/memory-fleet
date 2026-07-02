@@ -1,8 +1,8 @@
-"""Perception -> core glue (PLAN.md §3.2). Live: a grabber thread owns the
-camera and streams display frames, a detect thread runs YOLOE on the latest
-frame, an embed thread runs Unicom. Drive mode: one capture thread detects
-every fed frame synchronously (deterministic for tests). Results enter the
-core as messages. The server owns no logic — scheduling and plumbing only.
+"""Perception -> core glue. A grabber thread owns the camera and streams display
+frames, a detect thread runs YOLOE at a tunable cadence on the latest frame and
+emits boxes-only, and an embed thread runs Unicom on scheduled crops. Results
+enter the single-threaded memory core as messages. The server owns no logic —
+scheduling and plumbing only.
 """
 
 import base64
@@ -27,22 +27,21 @@ logger = logging.getLogger(__name__)
 
 # The detect thread's Python-side glue (ultralytics pre/post, BYTETrack) holds
 # the GIL in chunks; with the default 5 ms switch interval the grabber misses
-# camera frames (AVFoundation keeps only the latest) and video drops to
-# ~15 fps. Shorter slices keep the stream near camera rate (measured 25 fps).
+# camera frames (macOS AVFoundation keeps only the latest) and video halves to
+# ~15 fps. Shorter slices keep the stream near camera rate (~25 fps).
 sys.setswitchinterval(0.002)
 
 BROADCAST_WIDTH = 960
 THUMB_SIZE = 224  # big enough for the lightbox; only ONE rides in a fleet payload
-DRIVE_FPS = 5.0  # drive mode: synthetic clock, deterministic against fed frames
-# Live pacing: unpaced, the detector runs MPS at 100% duty (~13 fps) and cooks
-# the laptop for nothing — the demo's ingest target is ~5-8 fps (PLAN §8.2).
+# Detection cadence. Unpaced, the detector runs MPS at 100% duty (~13 fps) and
+# cooks the laptop for nothing — the demo's ingest target is ~5-8 fps.
 TARGET_FPS = 8.0
-# Video is decoupled from detection: 8 fps video looks choppy. Live mode runs a
-# grabber thread that owns the camera and streams JPEG frames at up to
-# DISPLAY_FPS (CPU-cheap, ~1.3 ms/frame), while the detect thread takes the
-# latest frame at TARGET_FPS and broadcasts boxes-only messages; the client
-# interpolates boxes between ticks. They must be separate threads: a ~90 ms MPS
-# detect call on the read loop caps video at ~10 fps (measured 2026-07-02).
+# Video is decoupled from detection: 8 fps video looks choppy. The grabber thread
+# owns the camera and streams JPEG frames at up to DISPLAY_FPS (CPU-cheap,
+# ~1.3 ms/frame), while the detect thread takes the latest frame at TARGET_FPS
+# and broadcasts boxes-only messages; the client interpolates boxes between
+# ticks. They must be separate threads: a ~90 ms MPS detect call on the read
+# loop caps video at ~10 fps.
 DISPLAY_FPS = 30.0
 
 
@@ -70,39 +69,15 @@ class CameraSource:
             self.cap = None
 
 
-class DriveSource:
-    """Frames arrive over the WebSocket (tests/drive). JPEG bytes queue unbounded
-    (small); decode happens on the capture thread so the event loop never blocks."""
-
-    def __init__(self):
-        self.frames: queue.Queue = queue.Queue()
-
-    def open(self) -> bool:
-        return True
-
-    def push(self, jpg: bytes):
-        self.frames.put(jpg)
-
-    def read(self):
-        try:
-            jpg = self.frames.get(timeout=0.25)
-        except queue.Empty:
-            return None
-        return cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-
-    def close(self):
-        pass
-
-
 class Pipeline:
-    """Live: grabber + detect + embed threads. Drive: capture + embed (every fed
-    frame is detected synchronously, deterministic). Everything else is messages."""
+    """Three threads: a grabber that owns the camera and streams frames, a detect
+    thread that runs YOLOE on the latest frame, and an embed thread. Everything
+    else flows to the core as messages."""
 
-    def __init__(self, core: Core, source, broadcast, drive_mode: bool = False):
+    def __init__(self, core: Core, source, broadcast):
         self.core = core
         self.source = source
         self.broadcast = broadcast  # thread-safe callable(dict)
-        self.drive_mode = drive_mode
         self.detector = Detector()
         self.embedder = Embedder()
         self.scheduler = EmbedScheduler()
@@ -111,15 +86,11 @@ class Pipeline:
         self._embed_q: queue.Queue = queue.Queue(maxsize=16)
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._frame_count = 0
-        # camera runs only while someone is watching AND the user has it enabled;
-        # drive mode is always on
+        # camera runs only while someone is watching AND the user has it enabled
         self._active = threading.Event()
         self._viewers = False
         self.user_enabled = True
         self.target_fps = TARGET_FPS  # live-tunable detection cadence (UI dial)
-        if drive_mode:
-            self._active.set()
         # rolling perf counters for the HUD's pipeline ticker
         self.last_embed_ms = 0.0
         self._tick_times: list[float] = []
@@ -137,10 +108,7 @@ class Pipeline:
     # -- lifecycle --
 
     def start(self):
-        if self.drive_mode:
-            workers = [("capture", self._capture_loop)]
-        else:
-            workers = [("grab", self._grab_loop), ("detect", self._detect_loop)]
+        workers = [("grab", self._grab_loop), ("detect", self._detect_loop)]
         workers.append(("embed", self._embed_loop))
         self._threads = [
             threading.Thread(target=fn, name=name, daemon=True) for name, fn in workers
@@ -172,7 +140,7 @@ class Pipeline:
         self.broadcast({"type": "camera", "on": on})
 
     def _recompute(self):
-        if self.drive_mode or (self._viewers and self.user_enabled):
+        if self._viewers and self.user_enabled:
             self._active.set()
         else:
             self._active.clear()
@@ -186,23 +154,6 @@ class Pipeline:
             self.burst_tids.add(tid)
         else:
             self.burst_tids.discard(tid)
-
-    # -- capture thread (drive mode only): synchronous, every fed frame detected --
-
-    def _capture_loop(self):
-        try:
-            self.detector.warm()
-        except Exception:
-            logger.exception("detector failed to load")
-            self.broadcast({"type": "error", "message": "detector failed to load — see server log"})
-            return
-        self.source.open()
-        while not self._stop.is_set():
-            frame = self.source.read()
-            if frame is None:
-                continue  # waiting for injected frames
-            self._tick(frame, send_jpg=True)
-        self.source.close()
 
     # -- grabber thread (live only): owns the camera, streams display frames --
 
@@ -272,11 +223,10 @@ class Pipeline:
                 last_session = self._session
                 self.detector.reset()  # fresh tracker state for the new camera session
             self._last_tick = time.time()
-            self._tick(frame, send_jpg=False)
+            self._tick(frame)
 
-    def _tick(self, frame, send_jpg: bool):
-        self._frame_count += 1
-        now = self._frame_count / DRIVE_FPS if self.drive_mode else time.time()
+    def _tick(self, frame):
+        now = time.time()
         props, detect_ms = self.detector.track(frame)
         self._perf(detect_ms, len(props))
 
@@ -304,26 +254,26 @@ class Pipeline:
             with contextlib.suppress(queue.Full):  # shed embeds rather than balloon
                 self._embed_q.put_nowait(jobs)
 
-        msg = {
-            # live mode sends boxes-only (video streams from the grabber);
-            # drive mode keeps boxes riding the frame for determinism
-            "type": "frame" if send_jpg else "boxes",
-            "detect_ms": round(detect_ms, 1),
-            "boxes": [
-                {
-                    "tid": p.tid,
-                    "epoch": self.scheduler.epoch(p.tid),
-                    "box": [round(v, 4) for v in p.box],
-                    "conf": round(p.conf, 2),
-                    "stability": self.scheduler.stability(p.tid),
-                    "hints": [c for c, _ in self._cls_seen.get(p.tid, Counter()).most_common(3)],
-                }
-                for p in props
-            ],
-        }
-        if send_jpg:
-            msg["jpg"] = _encode_frame(frame)
-        self.broadcast(msg)
+        # boxes-only: video streams from the grabber thread
+        self.broadcast(
+            {
+                "type": "boxes",
+                "detect_ms": round(detect_ms, 1),
+                "boxes": [
+                    {
+                        "tid": p.tid,
+                        "epoch": self.scheduler.epoch(p.tid),
+                        "box": [round(v, 4) for v in p.box],
+                        "conf": round(p.conf, 2),
+                        "stability": self.scheduler.stability(p.tid),
+                        "hints": [
+                            c for c, _ in self._cls_seen.get(p.tid, Counter()).most_common(3)
+                        ],
+                    }
+                    for p in props
+                ],
+            }
+        )
 
     def _perf(self, detect_ms: float, n_tracks: int):
         t = time.time()

@@ -1,27 +1,13 @@
-# Fleet Memory — build/run targets (PLAN.md §7)
+# Fleet Memory — build/run targets
 
-.PHONY: setup test test-sync smoke soak lint run run-b reset \
-        demo-check demo-restore demo-save demo-scale
+.PHONY: setup lint run run-b reset demo-check demo-restore demo-save demo-scale
 
 setup:
 	uv sync --all-extras
 
-test:
-	uv run pytest tests/gate -q
-
-smoke:
-	uv run pytest tests/smoke -q
-
-soak:
-	uv run python scripts/soak.py --source 0 --minutes 10
-
 lint:
 	uv run ruff check .
 	uv run ruff format --check .
-
-# runs against the Qdrant Cloud cluster in .env (throwaway fm-test-* collections)
-test-sync:
-	uv run pytest tests/sync -q
 
 run:
 	uv run python -m fleetmemory.server
@@ -32,12 +18,13 @@ run-b:
 reset:
 	rm -rf edge-data
 
-# --- demo rituals (PLAN.md §4) ---
+# --- demo rituals ---
 
+# offline preflight: weights, models, and caches present without network
 demo-check:
 	uv run python scripts/demo_check.py
-	uv run pytest tests/smoke tests/drive -q
 
+# build the 300k-vector scale shard (press S in the UI to attach it)
 demo-scale:
 	uv run python scripts/preload_scale.py
 

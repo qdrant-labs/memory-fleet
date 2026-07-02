@@ -1,4 +1,4 @@
-"""The single-threaded memory core (PLAN.md §3.2).
+"""The single-threaded memory core.
 
 All memory mutations happen here: ingest results, UI verbs, and sync events
 enter as queued messages; events come out through a callback. No locks by
@@ -24,10 +24,10 @@ from .store import Store, new_id
 
 logger = logging.getLogger(__name__)
 
-# Exemplar rows per object, diversity-gated. Raised from the plan's ~12
-# (Dylan, 2026-07-01): one "watch" that should cover many watches needs the
-# room; MAX_SIM cost is negligible at these sizes (§9.4). When full, a new
-# HUMAN view replaces the most redundant auto view, so confirms keep teaching.
+# Exemplar rows per object, diversity-gated. 24 views gives one instance enough
+# room to cover varied angles and lighting; MAX_SIM cost stays negligible at
+# this scale. When full, a new HUMAN view replaces the most redundant auto view,
+# so confirms keep teaching.
 VIEW_CAP = 24
 DIVERSITY_MAX = 0.95  # skip a new view too similar to a stored row
 NEG_CAP = 8
@@ -48,7 +48,7 @@ def _push_fingerprint(payload: dict) -> tuple:
 
 def fold_rows(krows: list, kviews: list, frows: list, fviews: list) -> tuple[list, list]:
     """Fold f's exemplar rows into k's: human rows first, diversity-gated, capped.
-    Used by merge and by the fleet label-fold push (§3.6). Returns (rows, views)."""
+    Used by merge and by the fleet label-fold push. Returns (rows, views)."""
     krows, kviews = list(krows), list(kviews)
     n = min(len(frows), len(fviews))  # defensive: never index past shorter metadata
     order = sorted(range(n), key=lambda i: not fviews[i].get("human"))
@@ -179,15 +179,6 @@ class ScaleStunt:
 
 
 @dataclass(slots=True)
-class Call:
-    """Run fn() on the core thread (the shards' only legal thread) and reply.
-    For tools and tests — verbs stay first-class messages."""
-
-    fn: object
-    reply: object | None = None
-
-
-@dataclass(slots=True)
 class ManifestRequest:
     """Sync worker asks for the immutable shard's snapshot manifest; the shard
     is only ever touched on the core thread, so this goes through the queue."""
@@ -207,9 +198,9 @@ class PreparePush:
 @dataclass(slots=True)
 class MarkPushed:
     """Sync worker reports a completed fleet push. Items either stamp t_sync in
-    place ({old_id, t_sync}) or — label-fold (§3.6) — rewrite the local point
-    under the fleet point's id ({old_id, fleet_id, label, rows, views, neg,
-    thumb, t_sync}) so the §3.3 id-present dedup applies verbatim on next pull."""
+    place ({old_id, t_sync}) or — label-fold — rewrite the local point under the
+    fleet point's id ({old_id, fleet_id, label, rows, views, neg, thumb, t_sync})
+    so the id-present dedup applies verbatim on next pull."""
 
     items: list
 
@@ -246,7 +237,7 @@ class Core:
         self.tracks: dict[int, TrackState] = {}
         # departed-but-unnamed tracks, still teachable from the unknowns drawer
         self.recent_unknowns: dict[tuple[int, int], TrackState] = {}
-        # session-scoped negatives for fleet (immutable) objects — not persisted (§3.5)
+        # session-scoped negatives for fleet (immutable) objects — not persisted
         self.session_negs: dict[str, list] = {}
         # sighting stats: object_id -> (count, last_seen). Persisted on mutable
         # objects at bind time; session-only for fleet-mirror objects.
@@ -500,8 +491,8 @@ class Core:
         self._emit_stats()
 
     def _fold_target(self, label: str, vec: np.ndarray) -> str | None:
-        """Instance identity (Dylan, 2026-07-01): an object is one physical
-        thing; the label is its display name and may repeat. Teaching folds
+        """Instance identity: an object is one physical thing; the label is its
+        display name and may repeat. Teaching folds
         into a same-name object ONLY when the view plausibly IS that object
         (>= s_suggest to its views) — otherwise it's a new instance. Five
         different watches = five clean points, all called "watch". Fleet
@@ -563,7 +554,7 @@ class Core:
                 thumb=payload.get("thumb", ""),
                 base_payload=payload,
             )
-        else:  # fleet object: session-scoped only (§3.5 — re-teach beats persistence machinery)
+        else:  # fleet object: session-scoped only (re-teach beats persistence machinery)
             self.session_negs.setdefault(m.object_id, []).append(neg)
             self.session_negs[m.object_id] = self.session_negs[m.object_id][-NEG_CAP:]
         ts.vetoed.add(m.object_id)
@@ -884,11 +875,6 @@ class Core:
             self.store.detach_scale_shard()
         self._emit({"type": "scale", "on": m.on})
         self._emit_stats()
-
-    def _on_call(self, m: Call):
-        result = m.fn()
-        if m.reply is not None:
-            m.reply.put(result)
 
     def _on_manifestrequest(self, m: ManifestRequest):
         manifest = None

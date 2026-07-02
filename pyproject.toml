@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Fleet Memory — shared object memory on Qdrant Edge (demo)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "qdrant-edge-py==0.7.2",   # beta, API drifts between minors — sync test is the canary
+    "qdrant-edge-py==0.7.2",   # beta, API drifts between minors — pinned exactly
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "numpy>=2.0.0,<2.3.0",
@@ -13,13 +13,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Real models — needed to run the app and the smoke/drive tests, but not by
-# CI (lint + deterministic gate + sync tests run model-free, PLAN.md §7).
+# Real models — needed to run the app.
 perception = [
     "ultralytics>=8.3",
     "lap>=0.5.12",  # BoT-SORT assignment; ultralytics runtime auto-install is disabled
     # torch-MPS inference leaks autoreleased Metal objects in pure Python loops
-    # (~80 MB/min measured); draining a pool per frame flattens it (spike_mps_leak.py)
+    # (~80 MB/min measured); draining a pool per detector call flattens it
     "pyobjc-core>=10; sys_platform == 'darwin'",
     "fastembed>=0.7.4",
     "opencv-python>=4.12.0",
@@ -27,22 +26,15 @@ perception = [
 
 [dependency-groups]
 dev = [
-    "pytest>=8.0",
     "ruff>=0.11",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-# Spike scripts are frozen measurement evidence (PLAN.md §9), not product code.
-extend-exclude = ["docs/spikes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-markers = ["smoke: real models, local only (deselected in CI)"]
 
 [build-system]
 requires = ["hatchling"]

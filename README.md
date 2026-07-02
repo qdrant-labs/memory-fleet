@@ -1,97 +1,117 @@
 # Fleet Memory
 
-Shared object memory on Qdrant Edge.
+Shared object memory on Qdrant Edge: every device remembers what any device learned.
 
-A webcam watches a desk. A class-agnostic detector proposes regions: it assigns
-no labels and has no vocabulary. Each stable region is embedded on-device and
-looked up in [Qdrant Edge](https://qdrant.tech/edge/), a vector search engine
-running inside the app process. A match shows the remembered name plus the live
-query latency. No match shows "unknown, teach me": a human names it once, and
-every device in the fleet can know it after curation.
+## The Idea
 
-The model only sees shapes. The memory knows what things are, and the memory is
-shared.
+Show a device an object once, give it a name, and every device in the fleet can
+recognize it. No model is trained or fine-tuned at any point: recognizing
+something is a vector search over the fleet's shared memory, and teaching
+something new is adding vectors to it.
 
-## How It Works
+Each device learns locally and works fully offline. When a connection is
+available, devices share what they learned through a central collection in
+Qdrant Cloud. One unit learns, all units know.
 
-- **Names come from vector search only.** The detector (YOLOE-11L prompt-free)
-  proposes boxes and masks; recognition is one native MAX_SIM query over
-  multivector points, embedded with Unicom-ViT-B-32 via FastEmbed.
-  Sub-millisecond at taught scale, under 3 ms against 300k memories
-  (measured in `docs/spikes/`). Detector class names appear only as
-  teach-time suggestion chips — a human always does the naming.
-- **An object is one physical thing.** Each point is one item with up to 24
-  views of it; the label is a display name and may repeat. Teach two
-  different watches as "watch" and you get two clean objects that both
-  answer to "watch" — re-teach the same watch and it folds into itself.
-- **Two-tier matching.** High similarity binds and shows the name. Borderline
-  similarity asks: "looks like «mug», same?" One tap confirms or rejects.
-  Rejections become negative exemplars that veto future false matches, and
-  ignored looks are suppressed without ever silently eating a taught object.
-- **Hybrid search over everything learned.** miniCOIL sparse + dense text
-  embeddings, fused with reciprocal rank fusion, all on-device — with the
-  engine latency on screen. "Cup" finds the coffee mug.
-- **Local first, fleet by curation.** Every device runs two Edge shards: a
-  mutable shard for local teachings and an immutable mirror of the central
-  fleet collection, synced by Edge's native partial snapshots. Nothing
-  reaches the fleet uncurated: review, prune bad views, then push. The same
-  item pushed from two devices folds into one fleet point.
-- **The fleet is a bonus, never a dependency.** Without `QDRANT_URL` (or
-  without wifi) everything runs fully on-device; the Qdrant Cloud fleet
-  reconnects on its own when reachable.
+## Why Qdrant Edge
+
+The demo runs on [Qdrant Edge](https://qdrant.tech/edge/), the embedded build of
+the Qdrant vector search engine:
+
+- **On-device search.** The engine runs inside the app process, against shards
+  on local disk. Recognition never leaves the device and needs no server.
+- **Fully offline.** Without a fleet configured, or with the network down,
+  everything keeps working. Sync resumes on its own when the fleet is reachable.
+- **Native Cloud sync.** Local shards synchronize with a Qdrant Cloud collection
+  through [Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/):
+  snapshot-based pulls, curated pushes.
+
+## Architecture and Stack
+
+1. **Capture.** A grabber thread owns the webcam and streams video (~25 fps).
+2. **Detect.** YOLOE proposes and tracks regions at ~8 Hz. Its class labels are
+   discarded; people and body parts are filtered out.
+3. **Embed.** Stable regions are cropped to their segmentation mask and embedded
+   into 512-d vectors on-device.
+4. **Match.** A vector search over the local shards decides: similarity ≥ 0.80
+   recognizes, ≥ 0.55 suggests a confirmation, below that the object is unknown.
+5. **Teach.** A human names unknowns and confirms suggestions. A memory is one
+   physical thing with up to 24 views; the same name can cover several objects.
+6. **Sync.** Curated objects go to the fleet; the fleet's memory flows back.
+
+| Component        | Choice                                                      |
+|------------------|-------------------------------------------------------------|
+| On-device search | Qdrant Edge 0.7.2, embedded shards                          |
+| Fleet            | Qdrant Cloud, one shared `fleet` collection                 |
+| Detector         | YOLOE-11L-seg prompt-free (ultralytics) + BoT-SORT tracking |
+| Image embedding  | Unicom ViT-B/32, 512-d, via fastembed (ONNX, CPU)           |
+| Text search      | miniCOIL sparse + bge-small dense, fused with RRF           |
+| Server           | FastAPI + one WebSocket                                     |
+| UI               | Vanilla JS, no build step                                   |
+
+## How Fleet Sync Works
+
+Each device keeps two local shards: a mutable one holding its own teachings and
+a read-only mirror of the fleet collection. Recognition searches both.
+
+- **Push is curated.** A human picks which objects to share. Only vectors, one
+  thumbnail, and metadata leave the device, never camera frames. An object that
+  already exists on the fleet is merged into, not duplicated.
+- **Pull is automatic.** The mirror updates from the fleet collection every
+  ~30 seconds using
+  [Qdrant's Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/).
+- **Local edits win.** Teach new views to a downloaded memory and your device
+  keeps a local copy that overrides the mirror, then merges back into the fleet
+  point on the next push. A sync never wipes something you taught.
 
 ## Quickstart
 
-Requires Python 3.12, [uv](https://docs.astral.sh/uv/), and a webcam.
+Requirements: macOS on Apple Silicon, Python 3.12,
+[uv](https://docs.astral.sh/uv/), and a webcam.
 
 ```bash
-make setup          # install (first run downloads model weights, ~500 MB)
+git clone <repo-url> && cd fleet-memory
+make setup          # first run downloads model weights (~500 MB total)
 make run            # http://127.0.0.1:8765
 ```
 
-Optional fleet sync (local-first: an unreachable fleet degrades gracefully):
+Fleet sync is optional. Without a `.env`, the app runs fully local:
 
 ```bash
-cp .env.example .env  # set QDRANT_URL + QDRANT_API_KEY (Qdrant Cloud)
+cp .env.example .env
+# QDRANT_URL + QDRANT_API_KEY  -> a Qdrant Cloud cluster (the fleet)
+# DEVICE_NAME                  -> names this unit in the fleet
+# EVENT_TAG                    -> tag stamped on pushed objects
 make run
-make run-b          # second "device" on the same laptop (own port + data dir)
 ```
 
-## Demo Script (3 Minutes)
-
-1. **Cold open.** Camera on a desk. Known objects carry solid boxes, names, and
-   a live latency readout. Unknowns carry a quiet "?".
-2. **Teach.** Click an unknown, type a name, rotate the item through the
-   3-second capture burst. It now recognizes the item from any side.
-3. **Speed.** The HUD strip shows every recognition query: microseconds to
-   low milliseconds, on-device, no server.
-4. **Scale.** Press `S` to attach the prebuilt stunt shard: 300,000 memories
-   ("what if this robot had been running for a year?"). Watch the latency
-   barely move. Build it once with `make demo-scale`.
-5. **The fleet.** Open inventory, prune a bad view, push. On the second
-   device: pull, and it recognizes everything the first device taught.
-   Every robot you ship knows what any of them ever learned.
-
-Before going on stage: `make demo-check` verifies models load offline and runs
-the full test chain. `make demo-restore` resets to the saved golden state.
-
-## Architecture
-
-```
-webcam -> detector (boxes+masks, no labels) -> masked crops -> embedder (512-d)
-   -> single-threaded memory core -> two Edge shards (mutable + fleet mirror)
-   -> events over one WebSocket -> vanilla JS overlay
-fleet: curated push via qdrant-client; pull via native partial snapshots (~30 s)
-```
-
-Layer map in `PLAN.md` (the build contract), spike evidence in `docs/spikes/`.
-
-## Tests
+Second device on the same laptop (port 8766, own data dir and name):
 
 ```bash
-make test    # deterministic core gate: mock geometry, real Edge shards
-make smoke   # real models over a bundled clip
-make soak    # 10-minute live pipeline soak, >= 2 fps required
-make test-sync            # fleet round-trip against the Cloud cluster in .env
-uv run pytest tests/drive # headless WebSocket drive of the real server
+make run-b
+```
+
+Scale stunt: `make demo-scale` builds a synthetic shard of 300k vectors; press
+`S` in the UI to attach it live and watch recognition latency barely move.
+`make reset` wipes local memory.
+
+## Applications
+
+- Robot or drone fleets that share what they have seen without shipping raw video.
+- Retail and warehouse device fleets learning a shared inventory from any unit.
+- Wearables and smart cameras that recognize objects a peer taught them.
+- Any edge fleet where devices must learn from each other while images stay on
+  the device.
+
+## Repo Layout
+
+```
+fleetmemory/
+  config.py          # .env plumbing, fleet opt-in gate
+  perception/        # detector, masked crops, embedder, embed cadence
+  memory/            # store (two shards), matcher, labels, core
+  sync/              # fleet client and sync manager
+  server/            # FastAPI app, WebSocket, capture/detect pipeline
+static/              # vanilla-JS UI + brand assets
+scripts/             # preload_scale.py (stunt shard), demo_check.py (offline preflight)
 ```

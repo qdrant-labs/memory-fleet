@@ -1,4 +1,4 @@
-"""Runtime configuration: .env plumbing and the fleet opt-in gate (PLAN.md §3.6).
+"""Runtime configuration: .env plumbing and the fleet opt-in gate.
 
 Fleet sync is opt-in: no QDRANT_URL in the environment means a fully local
 demo — no sync UI beyond a "fleet offline" hint.
