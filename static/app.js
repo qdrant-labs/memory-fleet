@@ -54,7 +54,7 @@ const handlers = {
     setCamera(m.camera !== false);
     S.memories = m.memories;
     bumpCounts();
-    initSliders(m.thresholds, m.detector_conf, m.detector_max_area ?? 0.2);
+    initSliders(m.thresholds, m.detector_conf, m.detector_max_area ?? 0.2, m.target_fps ?? 8);
     send({ cmd: "inventory" });
     send({ cmd: "map" });
   },
@@ -70,8 +70,11 @@ const handlers = {
   },
   boxes(m) { applyBoxes(m); },
   perf(m) {
-    $("t-fps").textContent = m.fps.toFixed(1);
-    if (m.embed_ms) $("t-embed").textContent = m.embed_ms.toFixed(1) + " ms";
+    $("m-detect").textContent = m.detect_ms;
+    if (m.embed_ms) {
+      $("m-embed").textContent = m.embed_ms.toFixed(1);
+      $("t-embed").textContent = m.embed_ms.toFixed(1) + " ms";
+    }
   },
   query(m) {
     S.latencies.push(m.ms);
@@ -200,7 +203,7 @@ function mapping() {
   if (!S.frame) return null;
   const s = Math.min(view.width / S.frame.width, view.height / S.frame.height);
   const w = S.frame.width * s, h = S.frame.height * s;
-  return { x: (view.width - w) / 2, y: 0, w, h }; // top-anchored; band sits below
+  return { x: (view.width - w) / 2, y: (view.height - h) / 2, w, h };
 }
 
 // ---------- render loop ----------
@@ -218,7 +221,7 @@ function animate(t) {
     alive.add(b.tid);
     const cur = disp.get(b.tid);
     if (!cur) { disp.set(b.tid, b.box.slice()); moving = true; continue; }
-    const k = 1 - Math.exp(-dt / 90); // ~90 ms settle, frame-rate independent
+    const k = 1 - Math.exp(-dt / 60); // ~60 ms settle, frame-rate independent
     for (let i = 0; i < 4; i++) {
       const d = b.box[i] - cur[i];
       if (Math.abs(d) > 0.0004) { cur[i] += d * k; moving = true; }
@@ -660,11 +663,21 @@ view.addEventListener("click", (e) => {
   const m = mapping();
   if (!m) return;
   const px = e.offsetX * devicePixelRatio, py = e.offsetY * devicePixelRatio;
+  // generous hit region: union of the drawn (eased) and latest detected box —
+  // a moving object outruns its 8 Hz box — plus padding and the chip strip
+  // above the box, so clicking "«item»? tap to answer" works too
+  const pad = 6 * devicePixelRatio, chip = 30 * devicePixelRatio;
   let best = null, bestArea = Infinity;
   for (const b of S.boxes) {
-    const [x1, y1, x2, y2] = disp.get(b.tid) || b.box; // hit-test what's drawn
-    const x = m.x + x1 * m.w, y = m.y + y1 * m.h, w = (x2 - x1) * m.w, h = (y2 - y1) * m.h;
-    if (px >= x && px <= x + w && py >= y && py <= y + h && w * h < bestArea) { best = b; bestArea = w * h; }
+    for (const box of [disp.get(b.tid), b.box]) {
+      if (!box) continue;
+      const [x1, y1, x2, y2] = box;
+      const x = m.x + x1 * m.w - pad, y = m.y + y1 * m.h - chip;
+      const w = (x2 - x1) * m.w + pad * 2, h = (y2 - y1) * m.h + chip + pad;
+      if (px >= x && px <= x + w && py >= y && py <= y + h && w * h < bestArea) {
+        best = b; bestArea = w * h;
+      }
+    }
   }
   if (best) showPop(best, e.offsetX, e.offsetY); else hidePop();
 });
@@ -998,7 +1011,7 @@ $("btn-merge").onclick = () => {
 };
 
 // ---------- tuning ----------
-function initSliders(t, conf, maxArea) {
+function initSliders(t, conf, maxArea, targetFps) {
   const wire = (id, vid, val, fn, fmt) => {
     const el = $(id);
     const show = fmt || ((v) => (+v).toFixed(2));
@@ -1014,6 +1027,8 @@ function initSliders(t, conf, maxArea) {
   wire("s-conf", "v-conf", conf, () => send({ cmd: "conf", value: +$("s-conf").value }));
   wire("s-area", "v-area", maxArea, () => send({ cmd: "max_area", value: +$("s-area").value }),
        (v) => `${Math.round(v * 100)}% of frame`);
+  wire("s-fps", "v-fps", targetFps, () => send({ cmd: "target_fps", value: +$("s-fps").value }),
+       (v) => `${Math.round(v)}/s`);
   tierBand();
 }
 function tierBand() {

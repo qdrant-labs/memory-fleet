@@ -173,6 +173,7 @@ def _hello(app) -> dict:
         "thresholds": {"s_same": t.s_same, "s_suggest": t.s_suggest, "s_ignore": t.s_ignore},
         "detector_conf": app.state.pipeline.detector.conf,
         "detector_max_area": app.state.pipeline.detector.max_area,
+        "target_fps": app.state.pipeline.target_fps,
         "camera": app.state.pipeline.user_enabled,
     }
 
@@ -191,6 +192,9 @@ def _dispatch(app, m: dict):
         return
     if cmd == "max_area":
         pipeline.detector.max_area = float(m["value"])
+        return
+    if cmd == "target_fps":
+        pipeline.target_fps = max(2.0, min(15.0, float(m["value"])))
         return
     if cmd == "camera":
         pipeline.set_user_enabled(bool(m.get("on")))

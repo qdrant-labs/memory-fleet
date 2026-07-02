@@ -112,21 +112,25 @@ the two approved demo beats (Wi-Fi kill + second unit, below).
   the latest frame and emits boxes-only messages; the client eases boxes
   between ticks (~90 ms). Measured 25 fps video / 8 Hz detect; heat profile
   unchanged. Drive mode keeps the synchronous single-thread path (boxes ride
-  frame messages) so tests stay deterministic.
+  frame messages) so tests stay deterministic. Detection cadence is a live
+  TUNING dial (4-12/s, `target_fps` cmd; verified 7.8→11.6/s over the wire);
+  the ticker shows video fps only (Dylan: detect Hz not useful).
 - **Demo script beats (Dylan, 2026-07-02)**: (1) kill Wi-Fi mid-demo —
   everything keeps working, FLEET OFFLINE pill, reconnect syncs; (2) teach
   on unit A, recognize on unit B (PLAN §4.5 — still unrehearsed). Rejected:
   TTS voice, live fleet-feed ticker (demos rarely run concurrently),
   leaderboards, glasses/robot hardware pivots.
-- **UI pass (Dylan, 2026-07-02: "not very pretty, low contrast")**: the
-  on-device search latency is the hero — an Edge band under the video (hero
-  µs figure + latency sparkline + memories/objects) absorbs the leftover
-  viewport height. Sans for prose, mono for telemetry; brighter contrast
-  tokens. Memory map is points-only (labels moved to hover) with wheel zoom
-  + drag pan, ⌂/double-click resets. Search results show last-seen time +
-  device name — the unit IS the location (no GPS on laptops; name a unit
-  after its place). Panel is "SEARCH", not "SEARCH THE MEMORY". Em dashes
-  swept from UI strings (Qdrant copy rule).
+- **UI pass (Dylan, 2026-07-02: "not very pretty, low contrast")**: sans for
+  prose, mono for telemetry; brighter contrast tokens. Latency stays in the
+  rail's RECOGNITION QUERY panel — an "Edge band" under the video was built
+  and REVERTED (Dylan: camera must be full width, latency below it is worse).
+  Memory map is points-only (labels moved to hover) with wheel zoom + drag
+  pan, ⌂/double-click resets. Search results show last-seen time + device
+  name — the unit IS the location (no GPS on laptops; name a unit after its
+  place). Panel is "SEARCH", not "SEARCH THE MEMORY". Em dashes swept from
+  UI strings (Qdrant copy rule). Feed click hit-region includes the chip
+  strip + a pad and the union of eased/latest box — at 25 fps video a moving
+  object visibly outruns its 8 Hz box, so tight hit-tests miss.
 - **Merge is same-kind only** (object+object or ignored+ignored) and
   preserves `kind` — a re-upsert without `kind`/`base_payload` silently
   corrupts points; every re-upsert call site must pass both.

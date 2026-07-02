@@ -117,6 +117,7 @@ class Pipeline:
         self._active = threading.Event()
         self._viewers = False
         self.user_enabled = True
+        self.target_fps = TARGET_FPS  # live-tunable detection cadence (UI dial)
         if drive_mode:
             self._active.set()
         # rolling perf counters for the HUD's pipeline ticker
@@ -257,7 +258,7 @@ class Pipeline:
             if not self._active.is_set():
                 self._active.wait(timeout=0.25)
                 continue
-            wait = self._last_tick + 1.0 / TARGET_FPS - time.time()
+            wait = self._last_tick + 1.0 / self.target_fps - time.time()
             if wait > 0:
                 self._stop.wait(min(wait, 0.05))
                 continue
