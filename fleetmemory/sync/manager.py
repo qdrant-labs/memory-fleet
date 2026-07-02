@@ -5,6 +5,7 @@ queued core messages. Sync failures degrade to "fleet offline", never crash.
 
 import logging
 import queue
+import shutil
 import tempfile
 import threading
 import time
@@ -96,12 +97,17 @@ class SyncManager:
         manifest = reply.get(timeout=REPLY_TIMEOUT)
         if manifest is None:
             return  # no immutable mirror (local mode)
-        with tempfile.TemporaryDirectory(prefix="fm-pull-") as td:
-            dest = Path(td) / "partial.snapshot"
+        # The core owns the snapshot file from the moment it's submitted — it
+        # deletes it after applying. Never tie the file's lifetime to a timeout
+        # here: a busy core (first boot) had the temp dir yanked mid-unpack.
+        workdir = Path(tempfile.mkdtemp(prefix="fm-pull-"))
+        try:
+            dest = workdir / "partial.snapshot"
             self.client.download_partial_snapshot(manifest, dest)
-            done: queue.Queue = queue.Queue()
-            self.core.submit(ApplyPartialSnapshot(path=str(dest), applied=done))
-            done.get(timeout=REPLY_TIMEOUT)  # keep temp file alive until applied
+        except Exception:
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise
+        self.core.submit(ApplyPartialSnapshot(path=str(dest), cleanup=True))
 
     # ---------- push: prepare (core) -> fleet ops (here) -> mark (core) ----------
 

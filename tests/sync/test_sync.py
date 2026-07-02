@@ -91,6 +91,27 @@ def test_blocklist_never_pushed(fleet):
     assert recs == []
 
 
+def test_broken_snapshot_rebuilds_mirror_and_recovers(fleet, tmp_path):
+    """A damaged pull must not wedge the device: the mirror is disposable —
+    rebuild it empty, and the next pull re-seeds it from the fleet."""
+    from fleetmemory.memory.core import ApplyPartialSnapshot
+
+    a = fleet("unit-a")
+    a.sync.client.ensure_collection()
+    a.sync.push([a.teach_direct("pen", "pen")])
+    a.wait_event("push_done")
+
+    garbage = tmp_path / "garbage.snapshot"
+    garbage.write_bytes(b"this is not a snapshot tar")
+    a.core.submit(ApplyPartialSnapshot(path=str(garbage)))
+    a.wait_event("fleet_error")
+
+    a.sync.pull_once()  # fresh (rebuilt) mirror re-seeds from the fleet
+    a.wait_event("pull_applied")
+    res = a.recognize("pen")
+    assert res.candidates and res.candidates[0].label == "pen"
+
+
 def test_pull_now_is_idempotent(fleet):
     a = fleet("unit-a")
     a.sync.client.ensure_collection()

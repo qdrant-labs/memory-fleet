@@ -10,9 +10,11 @@ saw, and mismatches are dropped.
 import base64
 import logging
 import queue
+import shutil
 import threading
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -127,7 +129,7 @@ class SetThresholds:
 @dataclass(slots=True)
 class ApplyPartialSnapshot:
     path: str
-    applied: object | None = None  # optional ack queue: sender keeps the file alive
+    cleanup: bool = False  # core deletes the snapshot's directory after consuming it
 
 
 @dataclass(slots=True)
@@ -617,9 +619,18 @@ class Core:
         try:
             self.store.apply_partial_snapshot(m.path)
             removed = self.store.dedup_after_pull()
+        except Exception:
+            # the mirror is a disposable replica of the fleet: rebuild empty and
+            # let the next pull re-seed it, rather than staying wedged
+            logger.exception("pull apply failed; rebuilding the fleet mirror")
+            self.store.reset_immutable()
+            self._emit(
+                {"type": "fleet_error", "message": "pull failed — mirror rebuilt, re-syncing"}
+            )
+            return
         finally:
-            if m.applied is not None:
-                m.applied.put(True)
+            if m.cleanup:
+                shutil.rmtree(Path(m.path).parent, ignore_errors=True)
         self._emit({"type": "pull_applied", "deduped": len(removed)})
         self._emit_stats()
 

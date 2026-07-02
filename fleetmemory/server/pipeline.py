@@ -41,6 +41,7 @@ class CameraSource:
     def close(self):
         if self.cap:
             self.cap.release()
+            self.cap = None
 
 
 class DriveSource:
@@ -83,7 +84,10 @@ class Pipeline:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._frame_count = 0
-        self.camera_ok = False
+        # camera runs only while someone is watching; drive mode is always on
+        self._active = threading.Event()
+        if drive_mode:
+            self._active.set()
 
     # -- lifecycle --
 
@@ -102,6 +106,13 @@ class Pipeline:
             t.join(timeout=5)
         self.source.close()
 
+    def set_active(self, on: bool):
+        """First viewer connects -> camera on; last one leaves -> camera released."""
+        if on or self.drive_mode:
+            self._active.set()
+        else:
+            self._active.clear()
+
     def note_event(self, ev: dict):
         """Track which tids are mid-burst so the scheduler embeds them every tick."""
         if ev.get("type") != "track_update":
@@ -116,18 +127,32 @@ class Pipeline:
 
     def _capture_loop(self):
         self.detector.warm()
-        self.camera_ok = self.source.open()
-        if not self.camera_ok:
-            self.broadcast({"type": "error", "message": "video source unavailable"})
-            return
+        src_open = False
         while not self._stop.is_set():
+            if not self._active.is_set():
+                if src_open:
+                    self.source.close()  # camera light goes off
+                    src_open = False
+                self._active.wait(timeout=0.25)
+                continue
+            if not src_open:
+                if not self.source.open():
+                    self.broadcast({"type": "error", "message": "video source unavailable"})
+                    self._stop.wait(2.0)  # retry while a viewer is connected
+                    continue
+                src_open = True
             frame = self.source.read()
             if frame is None:
                 if self.drive_mode:
                     continue  # waiting for injected frames
-                self.broadcast({"type": "error", "message": "camera read failed"})
-                return
+                self.broadcast({"type": "error", "message": "camera read failed — retrying"})
+                self.source.close()
+                src_open = False
+                self._stop.wait(1.0)
+                continue
             self._tick(frame)
+        if src_open:
+            self.source.close()
 
     def _tick(self, frame):
         self._frame_count += 1

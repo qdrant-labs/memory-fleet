@@ -4,6 +4,8 @@ point id — mutable wins ties. The shard is the source of truth for vectors;
 nothing here caches them (PLAN.md §12.3).
 """
 
+import shutil
+import tarfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -308,9 +310,31 @@ class Store:
 
     # ---------- sync support (PLAN.md §3.3 dedup rule) ----------
 
-    def apply_partial_snapshot(self, snapshot_path: str | Path):
+    def reset_immutable(self):
+        """The mirror is a disposable replica of the fleet — on damage, rebuild
+        it empty and let the next pull re-seed it."""
+        if self.immutable is None:
+            return
+        self.immutable.close()
+        immut_dir = self.data_dir / "immutable"
+        shutil.rmtree(immut_dir, ignore_errors=True)
+        immut_dir.mkdir(parents=True)
+        self.immutable = EdgeShard.create(str(immut_dir), shard_config(self.dim))
+
+    def apply_partial_snapshot(self, snapshot_path: str | Path) -> bool:
+        """Apply a partial snapshot to the mirror. Returns False for an empty
+        delta — an up-to-date mirror gets a zero-byte body (or a tar with no
+        segments/), and Edge 0.7.2's update_from_snapshot chokes on both
+        instead of no-opping."""
         assert self.immutable is not None, "partial snapshot without an immutable mirror"
+        snapshot_path = Path(snapshot_path)
+        if snapshot_path.stat().st_size == 0:
+            return False
+        with tarfile.open(snapshot_path) as tar:
+            if not any(m.name.startswith("segments") for m in tar):
+                return False
         self.immutable.update_from_snapshot(str(snapshot_path))
+        return True
 
     def dedup_after_pull(self) -> list[str]:
         """Delete a mutable point ONLY when it was pushed (t_sync stamped) AND its

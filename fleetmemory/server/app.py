@@ -99,6 +99,7 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
         await sock.accept()
         q: asyncio.Queue = asyncio.Queue(maxsize=512)
         hub.clients[sock] = q
+        pipeline.set_active(True)  # first viewer turns the camera on
         await sock.send_text(json.dumps(_hello(app)))
 
         async def sender():
@@ -116,6 +117,8 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
         finally:
             send_task.cancel()
             hub.clients.pop(sock, None)
+            if not hub.clients:
+                pipeline.set_active(False)  # last viewer left: release the camera
 
     return app
 
