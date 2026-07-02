@@ -36,10 +36,18 @@ class SyncManager:
         self.core = core
         self.client = client
         self.interval = interval
+        self.online: bool | None = None  # None = never tried yet
         self._on_event = on_event or (lambda e: None)
         self._jobs: queue.Queue = queue.Queue()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def _set_online(self, on: bool):
+        """The demo is local-first; the cloud fleet is a bonus. Status events
+        fire on TRANSITIONS only — an unreachable fleet must not nag."""
+        if self.online != on:
+            self.online = on
+            self._on_event({"type": "fleet_status", "online": on})
 
     # ---------- lifecycle ----------
 
@@ -62,11 +70,15 @@ class SyncManager:
     # ---------- worker ----------
 
     def _run(self):
+        self._ensured = False
         try:
             self.client.ensure_collection()
+            self._ensured = True
             self.pull_once()  # seed / catch-up on boot
+            self._set_online(True)
         except Exception as e:
-            self._fleet_error("fleet unreachable at boot", e)
+            logger.info("sync: fleet unreachable at boot (%s) — running local-first", e)
+            self._set_online(False)
         next_pull = time.time() + self.interval
         while not self._stop.is_set():
             timeout = max(0.2, next_pull - time.time())
@@ -77,17 +89,22 @@ class SyncManager:
             if job is None:
                 return
             try:
+                if not self._ensured:  # fleet came back after an offline boot
+                    self.client.ensure_collection()
+                    self._ensured = True
                 if job[0] == "pull":
                     self.pull_once()
                     next_pull = time.time() + self.interval
                 elif job[0] == "push":
                     self.push(job[1])
+                self._set_online(True)
             except Exception as e:
-                self._fleet_error(f"{job[0]} failed", e)
-
-    def _fleet_error(self, msg: str, e: Exception):
-        logger.warning("sync: %s: %s", msg, e)
-        self._on_event({"type": "fleet_error", "message": msg})
+                logger.warning("sync: %s failed: %s", job[0], e)
+                self._set_online(False)
+                if job[0] == "push":  # a user-initiated action deserves a reply
+                    self._on_event(
+                        {"type": "fleet_error", "message": "push failed — fleet unreachable"}
+                    )
 
     # ---------- pull: manifest (core) -> download (here) -> apply (core) ----------
 
@@ -122,15 +139,22 @@ class SyncManager:
         now = time.time()
         for o in objs:
             existing = self.client.find_by_label(o["label"])
-            if existing is not None and str(existing.id) != o["id"]:
-                # name == identity extended to the fleet: fold into the fleet point
+            if existing is not None:
+                # name == identity extended to the fleet: fold into the fleet
+                # point — ALSO when the ids match, because another device may
+                # have grown that fleet point since we last pulled it
                 frows = [
                     np.asarray(r, dtype=np.float32)
                     for r in (existing.vector or {}).get("exemplars", [])
                 ]
                 fviews = list((existing.payload or {}).get("views") or [])
                 rows, views = fold_rows(frows, fviews, o["rows"], o["views"])
-                payload = {**(existing.payload or {}), "views": views, "t_sync": now}
+                payload = {
+                    **(existing.payload or {}),
+                    "views": views,
+                    "t_sync": now,
+                    "label_key": o["label"].strip().lower(),
+                }
                 self.client.upsert_object(str(existing.id), o["label"], rows, payload)
                 items.append(
                     {
@@ -142,12 +166,14 @@ class SyncManager:
                         "neg": o["neg"],
                         "thumb": o["thumb"],
                         "t_sync": now,
+                        "fingerprint": o.get("fingerprint"),
                     }
                 )
             else:
                 payload = {
                     "kind": "object",
                     "label": o["label"],
+                    "label_key": o["label"].strip().lower(),
                     "device": o["device"],
                     "event": o["event"],
                     "t_created": o["t_created"],
@@ -157,5 +183,7 @@ class SyncManager:
                     "thumb": o["thumb"],
                 }
                 self.client.upsert_object(o["id"], o["label"], o["rows"], payload)
-                items.append({"old_id": o["id"], "t_sync": now})
+                items.append(
+                    {"old_id": o["id"], "t_sync": now, "fingerprint": o.get("fingerprint")}
+                )
         self.core.submit(MarkPushed(items=items))

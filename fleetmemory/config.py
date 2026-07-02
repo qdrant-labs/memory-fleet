@@ -25,7 +25,11 @@ def load_env_file(path: str | Path = ".env") -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        values[key.strip()] = value.strip().strip("'\"")
+        key = key.strip().removeprefix("export ").strip()
+        value = value.strip()
+        if not (value.startswith('"') or value.startswith("'")):
+            value = value.split(" #")[0].strip()  # drop inline comments
+        values[key] = value.strip("'\"")
     return values
 
 
@@ -49,11 +53,15 @@ def load_settings(
 ) -> Settings:
     """Build Settings from a .env file merged with the environment (environ wins)."""
     merged = {**load_env_file(env_file), **environ}
+    try:
+        port = int(merged.get("FM_PORT") or DEFAULT_PORT)
+    except ValueError:
+        port = DEFAULT_PORT
     return Settings(
         qdrant_url=merged.get("QDRANT_URL") or None,
         qdrant_api_key=merged.get("QDRANT_API_KEY") or None,
         device_name=merged.get("DEVICE_NAME") or socket.gethostname(),
         event_tag=merged.get("EVENT_TAG") or "dev",
-        port=int(merged.get("FM_PORT") or DEFAULT_PORT),
+        port=port,
         data_dir=Path(merged.get("FM_DATA_DIR") or "edge-data"),
     )

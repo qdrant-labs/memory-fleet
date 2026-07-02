@@ -41,6 +41,18 @@ def test_flicker_resets_stability_but_keeps_epoch():
     assert [(i.tid, i.epoch) for i in embed] == [(1, 1)]
 
 
+def test_same_tid_after_tick_pause_is_new_incarnation():
+    """Ticks pause (camera off), the tracker re-emits the same tid on resume:
+    that must be a new incarnation — the old binding must not leak."""
+    s = EmbedScheduler(stable_frames=1, requery_interval=2.0, dead_after=1.5)
+    s.tick([5], now=0.0)
+    assert s.epoch(5) == 1
+    to_embed, died = s.tick([5], now=60.0)  # visible again after a long pause
+    assert [(i.tid, i.epoch) for i in died] == [(5, 1)]
+    assert s.epoch(5) == 2
+    assert [(i.tid, i.epoch) for i in to_embed] == [(5, 2)]
+
+
 def test_dead_track_reappearing_is_new_incarnation():
     s = EmbedScheduler(stable_frames=1, requery_interval=2.0, dead_after=1.5)
     s.tick([5], now=0.0)

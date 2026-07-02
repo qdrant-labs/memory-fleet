@@ -1,6 +1,6 @@
 # Fleet Memory — build/run targets (PLAN.md §7)
 
-.PHONY: setup test smoke soak lint run run-b reset fleet-up fleet-down \
+.PHONY: setup test test-sync smoke soak lint run run-b reset \
         demo-check demo-restore demo-save demo-scale
 
 setup:
@@ -19,11 +19,9 @@ lint:
 	uv run ruff check .
 	uv run ruff format --check .
 
-fleet-up:
-	docker compose up -d
-
-fleet-down:
-	docker compose down
+# runs against the Qdrant Cloud cluster in .env (throwaway fm-test-* collections)
+test-sync:
+	uv run pytest tests/sync -q
 
 run:
 	uv run python -m fleetmemory.server
@@ -39,7 +37,6 @@ reset:
 demo-check:
 	uv run python scripts/demo_check.py
 	uv run pytest tests/smoke tests/drive -q
-	uv run pytest tests/sync -q
 
 demo-scale:
 	uv run python scripts/preload_scale.py

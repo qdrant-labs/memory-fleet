@@ -55,6 +55,26 @@ body {
 .top-btn.hidden { display: none; }
 .top-btn.cam-off { color: var(--red); border-color: var(--red); background: var(--red-soft); }
 
+/* fleet pill + tooltip */
+.pill {
+  position: relative; display: flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border); border-radius: 999px; padding: 5px 13px;
+  font-size: 10.5px; letter-spacing: 1.5px; color: var(--dim); cursor: help;
+}
+.pill.on { border-color: rgba(52, 240, 176, .5); color: var(--green); }
+.pill.off { color: var(--faint); }
+.pill.local { border-style: dashed; }
+.pill::after {
+  content: attr(data-tip);
+  position: absolute; top: calc(100% + 9px); right: 0; z-index: 80;
+  width: 280px; padding: 9px 11px;
+  background: rgba(5, 5, 11, .97); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--dim); font-size: 11px; line-height: 1.5; letter-spacing: .2px;
+  text-transform: none; white-space: normal;
+  opacity: 0; pointer-events: none; transition: opacity .15s ease .1s;
+}
+.pill:hover::after { opacity: 1; }
+
 /* ---------- layout ---------- */
 #grid { flex: 1; display: grid; grid-template-columns: 1fr 400px; gap: 10px; min-height: 0; }
 #rail { display: flex; flex-direction: column; gap: 10px; min-height: 0; }

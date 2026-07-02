@@ -29,9 +29,10 @@ class Hub:
         self.clients: dict[WebSocket, asyncio.Queue] = {}
 
     def broadcast(self, event: dict):
-        if self.loop is None:
-            return
-        self.loop.call_soon_threadsafe(self._push, event)
+        if self.loop is None or self.loop.is_closed():
+            return  # worker threads may outlive the loop briefly at shutdown
+        with contextlib.suppress(RuntimeError):
+            self.loop.call_soon_threadsafe(self._push, event)
 
     def _push(self, event: dict):
         is_frame = event.get("type") == "frame"
@@ -75,11 +76,23 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
     store = Store(
         settings.data_dir, with_immutable=settings.fleet_enabled, label_embedder=label_embedder
     )
+    # the shards are core-thread-only, so _hello must not call store.count();
+    # track the last known count from the event stream instead
+    app.state.mem_count = store.count()  # safe: core thread hasn't started yet
+
+    def on_core_event(e: dict):
+        if "memories" in e:
+            app.state.mem_count = e["memories"]
+        elif e.get("type") == "query":
+            app.state.mem_count = e["searched"]
+        app.state.pipeline.note_event(e)
+        hub.broadcast(e)
+
     core = verbs.Core(
         store,
         device_name=settings.device_name,
         event_tag=settings.event_tag,
-        on_event=lambda e: (app.state.pipeline.note_event(e), hub.broadcast(e)),
+        on_event=on_core_event,
     )
     source = DriveSource() if drive_mode else CameraSource(0)
     pipeline = Pipeline(core, source, hub.broadcast, drive_mode=drive_mode)
@@ -129,8 +142,13 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
         send_task = asyncio.create_task(sender())
         try:
             while True:
-                msg = json.loads(await sock.receive_text())
-                _dispatch(app, msg)
+                raw = await sock.receive_text()
+                try:  # one malformed message must not tear down the connection
+                    _dispatch(app, json.loads(raw))
+                except WebSocketDisconnect:
+                    raise
+                except Exception:
+                    logger.exception("bad ws message: %.120s", raw)
         except WebSocketDisconnect:
             pass
         finally:
@@ -149,7 +167,7 @@ def _hello(app) -> dict:
         "type": "hello",
         "device": settings.device_name,
         "fleet": settings.fleet_enabled,
-        "memories": app.state.store.count(),
+        "memories": app.state.mem_count,
         "thresholds": {"s_same": t.s_same, "s_suggest": t.s_suggest, "s_ignore": t.s_ignore},
         "detector_conf": app.state.pipeline.detector.conf,
         "detector_max_area": app.state.pipeline.detector.max_area,

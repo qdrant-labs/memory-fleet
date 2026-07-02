@@ -155,7 +155,11 @@ class Store:
         for p, from_mut in hits:
             pid = str(p.id)
             prev = best.get(pid)
-            if prev is None or p.score > prev.score or (from_mut and not prev.from_mutable):
+            # same id in both shards: the mutable copy is the local truth and
+            # must win outright — an older mirror copy may legitimately score higher
+            if prev is not None and prev.from_mutable and not from_mut:
+                continue
+            if prev is None or (from_mut and not prev.from_mutable) or p.score > prev.score:
                 pl = p.payload or {}
                 best[pid] = Candidate(
                     id=pid,
@@ -195,12 +199,16 @@ class Store:
         base_payload: dict | None = None,
     ):
         """base_payload: when re-upserting an existing point, pass its current
-        payload so auxiliary keys (sightings, t_seen, ...) survive the rewrite."""
+        payload so auxiliary keys (sightings, t_seen, ...) survive the rewrite.
+        t_sync=None means "this content is NOT on the fleet": any local edit to
+        a pushed object must clear the old stamp, or the next pull's dedup
+        would delete the edit (id present in mirror + stale t_sync)."""
         assert len(rows) == len(views), "exemplar rows and view metadata must stay row-aligned"
         payload = {
             **(base_payload or {}),
             "kind": kind,
             "label": label,
+            "label_key": label.strip().lower(),  # case-insensitive identity, incl. fleet
             "device": device,
             "event": event,
             "t_created": t_created if t_created is not None else time.time(),
@@ -210,6 +218,8 @@ class Store:
         }
         if t_sync is not None:
             payload["t_sync"] = t_sync
+        else:
+            payload.pop("t_sync", None)
         vector = {"exemplars": [r.tolist() for r in rows]}
         if self.labels is not None:
             sparse, dense = self.labels.embed_doc(label)
@@ -351,7 +361,10 @@ class Store:
                 pl = p.payload or {}
                 if pl.get("kind", "object") != "object" or pl.get("synthetic"):
                     continue  # blocklist entries and stunt synthetics never match labels
-                if pid not in best or p.score > best[pid].score:
+                prev = best.get(pid)
+                if prev is not None and prev.from_mutable and not from_mut:
+                    continue  # mutable copy is the local truth for a shared id
+                if prev is None or (from_mut and not prev.from_mutable) or p.score > prev.score:
                     best[pid] = Candidate(
                         pid, float(p.score), "object", pl.get("label", ""), pl, from_mut
                     )

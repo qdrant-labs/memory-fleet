@@ -20,6 +20,7 @@ const S = {
   selected: new Set(),
   expanded: null,
   fleetOn: false,
+  fleetConfigured: false,
   cameraOn: true,
   searchHits: null,
   searchResults: null,
@@ -34,12 +35,19 @@ ws.onmessage = (e) => {
   const h = handlers[m.type];
   if (h) h(m);
 };
-ws.onclose = () => toast("connection lost — reload");
+ws.onclose = () => {
+  S.dead = true;
+  $("unit-dot").className = "unit-dot off";
+  $("no-feed").textContent = "connection lost — reload the page";
+  $("no-feed").style.display = "flex";
+  toast("connection lost — reload");
+};
 
 const handlers = {
   hello(m) {
     $("device-name").textContent = (m.device || "unit").toUpperCase();
-    setFleet(m.fleet);
+    S.fleetConfigured = m.fleet;
+    setFleet(false); // pill lights up on the first successful sync (fleet_status)
     setCamera(m.camera !== false);
     S.memories = m.memories;
     bumpCounts();
@@ -53,17 +61,22 @@ const handlers = {
     img.src = "data:image/jpeg;base64," + m.jpg;
     S.boxes = m.boxes;
     $("t-detect").textContent = m.detect_ms + " ms";
+    const seen = new Set(m.boxes.map((b) => b.tid));
     for (const b of m.boxes) {
       const t = S.tracks.get(b.tid);
-      if (t && t.epoch !== b.epoch) S.tracks.delete(b.tid);
+      if (t && t.epoch !== b.epoch) { S.tracks.delete(b.tid); S.bursts.delete(b.tid); }
     }
+    for (const tid of [...S.bursts.keys()]) if (!seen.has(tid)) S.bursts.delete(tid);
     renderUnknownCount();
     if (S.drawerMode === "unknowns") renderUnknowns();
   },
   perf(m) {
     $("t-fps").textContent = m.fps.toFixed(1);
     $("m-detect").textContent = m.detect_ms;
-    if (m.embed_ms) $("m-embed").textContent = m.embed_ms.toFixed(1);
+    if (m.embed_ms) {
+      $("m-embed").textContent = m.embed_ms.toFixed(1);
+      $("t-embed").textContent = m.embed_ms.toFixed(1) + " ms";
+    }
   },
   query(m) {
     S.latencies.push(m.ms);
@@ -85,7 +98,11 @@ const handlers = {
     if (S.drawerMode === "unknowns") renderUnknowns();
   },
   burst_progress(m) { S.bursts.set(m.tid, m); },
-  stats(m) { S.memories = m.memories; setFleet(m.fleet); bumpCounts(); },
+  stats(m) { S.memories = m.memories; bumpCounts(); },
+  fleet_status(m) {
+    setFleet(m.online);
+    toast(m.online ? "fleet linked — memories syncing" : "fleet unreachable — running local");
+  },
   camera(m) { setCamera(m.on); },
   object_created(m) {
     toast(`taught «${m.label}» — it will remember`);
@@ -111,6 +128,10 @@ const handlers = {
   },
   inventory(m) {
     S.inventory = m.items;
+    // prune the curation selection: forgotten/merged/pushed-away ids must not
+    // linger invisibly and feed a stale merge/push
+    const pushable = new Set(m.items.filter((o) => o.local && !o.ignored).map((o) => o.object_id));
+    for (const id of [...S.selected]) if (!pushable.has(id)) S.selected.delete(id);
     bumpCounts();
     renderMemories();
     if (S.drawerMode === "inventory") renderInventory();
@@ -151,6 +172,7 @@ function bumpCounts() {
 
 // ---------- clock ----------
 setInterval(() => {
+  if (S.dead) return;
   const s = Math.floor((Date.now() - S.t0) / 1000);
   $("clock").textContent = `T+${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }, 1000);
@@ -175,6 +197,7 @@ function mapping() {
 }
 
 function draw() {
+  if (S.dead) return;
   ctx.clearRect(0, 0, view.width, view.height);
   const m = mapping();
   if (!m || !S.cameraOn) { $("no-feed").style.display = "flex"; return; }
@@ -536,7 +559,7 @@ $("btn-inventory").onclick = () => { openDrawer("inventory"); send({ cmd: "inven
 $("drawer-close").onclick = () => closeDrawer();
 $("btn-tuning").onclick = () => $("tuning").classList.toggle("hidden");
 $("tuning-close").onclick = () => $("tuning").classList.add("hidden");
-$("btn-pull").onclick = () => { send({ cmd: "pull_now" }); addEvent("fleet", "pulling fleet memory…"); };
+$("btn-pull").onclick = () => { send({ cmd: "pull_now" }); toast("pulling fleet memory…"); };
 $("btn-camera").onclick = () => send({ cmd: "camera", on: !S.cameraOn });
 
 function openDrawer(mode) {
@@ -567,6 +590,14 @@ function renderUnknowns(force) {
   const sig = live.map((b) => b.tid).join(",") + "|" + [...S.archived.keys()].join(",");
   if (!force && sig === unkSig) return;
   unkSig = sig;
+  // half-typed names must survive a re-render (tracks come and go constantly)
+  const typed = {};
+  let focusKey = null;
+  body.querySelectorAll(".archived input").forEach((i) => {
+    const k = i.dataset.tid + ":" + i.dataset.epoch;
+    if (i.value) typed[k] = i.value;
+    if (document.activeElement === i) focusKey = k;
+  });
   let html = "";
   if (live.length) {
     html += `<div class="section-head">in view — click to teach</div>`;
@@ -598,8 +629,8 @@ function renderUnknowns(force) {
   body.querySelectorAll(".unknown-item:not(.archived)").forEach((el) => {
     el.onclick = () => {
       const b = S.boxes.find((x) => x.tid === +el.dataset.tid);
-      if (b) {
-        const m = mapping();
+      const m = mapping();
+      if (b && m) {
         showPop(b, (m.x + b.box[0] * m.w) / devicePixelRatio + 20,
                    (m.y + b.box[1] * m.h) / devicePixelRatio + 20);
       }
@@ -607,6 +638,12 @@ function renderUnknowns(force) {
   });
   body.querySelectorAll(".archived").forEach((el) => {
     const input = el.querySelector("input");
+    const key = input.dataset.tid + ":" + input.dataset.epoch;
+    if (typed[key]) input.value = typed[key];
+    if (focusKey === key) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
     const doTeach = () => {
       const label = input.value.trim();
       if (!label) return;
@@ -720,15 +757,18 @@ function updateCuration() {
 $("btn-push").onclick = () => {
   if (!S.selected.size) return;
   send({ cmd: "push", object_ids: [...S.selected] });
-  addEvent("fleet", `pushing ${S.selected.size} to the fleet…`);
+  toast(`pushing ${S.selected.size} to the fleet…`);
   S.selected.clear();
   updateCuration();
+  if (S.drawerMode === "inventory") renderInventory();
 };
 $("btn-merge").onclick = () => {
   const [a, b] = [...S.selected];
   if (b && confirm("merge the two selected objects? the first keeps its name"))
     send({ cmd: "merge", keep_id: a, fold_id: b });
   S.selected.clear();
+  updateCuration();
+  if (S.drawerMode === "inventory") renderInventory();
 };
 
 // ---------- tuning ----------
@@ -764,13 +804,39 @@ function setCamera(on) {
   $("btn-camera").classList.toggle("cam-off", !on);
   $("btn-camera").textContent = on ? "⏻ CAMERA" : "⏻ CAMERA OFF";
   $("rec").style.display = on ? "flex" : "none";
-  if (!on) { S.frame = null; S.boxes = []; draw(); }
+  if (!on) {
+    S.frame = null;
+    S.boxes = [];
+    draw();
+    renderUnknownCount();
+    if (S.drawerMode === "unknowns") renderUnknowns();  // "in view" list must empty
+  }
 }
 function setFleet(on) {
   S.fleetOn = on;
+  const pill = $("fleet-pill");
   $("fleet-dot").className = "unit-dot " + (on ? "" : "off");
-  $("fleet-label").textContent = on ? "fleet linked" : "fleet offline";
+  if (!S.fleetConfigured) {
+    pill.className = "pill off local";
+    $("fleet-label").textContent = "LOCAL ONLY";
+    pill.dataset.tip = "Running fully on-device: detection, embeddings, and vector search " +
+      "all happen in this process — no server. Set QDRANT_URL in .env to link a shared " +
+      "fleet memory in Qdrant Cloud, so every unit knows what any unit learned.";
+  } else if (on) {
+    pill.className = "pill on";
+    $("fleet-label").textContent = "FLEET LINKED";
+    pill.dataset.tip = "Connected to the shared fleet memory (Qdrant Cloud). Objects you " +
+      "curate and push become recognizable to every unit in the fleet; new fleet " +
+      "memories arrive here automatically (~30 s).";
+  } else {
+    pill.className = "pill off";
+    $("fleet-label").textContent = "FLEET OFFLINE";
+    pill.dataset.tip = "The shared fleet memory (Qdrant Cloud) isn't reachable right now. " +
+      "Everything still works on-device; your teachings stay local and sync " +
+      "automatically when the fleet comes back.";
+  }
   $("btn-pull").classList.toggle("hidden", !on);
+  if (S.drawerMode === "inventory") updateCuration();
 }
 addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() === "s" && !e.metaKey && !e.ctrlKey

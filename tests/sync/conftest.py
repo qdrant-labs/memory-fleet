@@ -1,7 +1,8 @@
-"""Sync test harness: real Docker/CI Qdrant server, random controlled vectors,
-no models (PLAN.md §7 — CI-safe). Each test gets its own fleet collection."""
+"""Sync test harness: runs against the real Qdrant Cloud cluster from .env —
+the fleet is Cloud, full stop (no Docker anywhere; Dylan, 2026-07-01). Each
+test gets a throwaway collection (fm-test-*), deleted in teardown. Random
+controlled vectors, no models."""
 
-import os
 import queue
 import time
 import uuid
@@ -10,23 +11,31 @@ import numpy as np
 import pytest
 import requests
 
+from fleetmemory.config import load_settings
 from fleetmemory.memory.core import Call, Core
 from fleetmemory.memory.store import Store
 from fleetmemory.sync.client import FleetClient
 from fleetmemory.sync.manager import SyncManager
 
-QDRANT_URL = os.environ.get("QDRANT_TEST_URL", "http://localhost:6333")
+_settings = load_settings()
+QDRANT_URL = _settings.qdrant_url or ""
+QDRANT_KEY = _settings.qdrant_api_key
 DIM = 64
 
 
-def _server_up() -> bool:
+def _fleet_reachable() -> bool:
+    if not QDRANT_URL:
+        return False
     try:
-        return requests.get(QDRANT_URL, timeout=2).ok
+        headers = {"api-key": QDRANT_KEY} if QDRANT_KEY else {}
+        return requests.get(QDRANT_URL, headers=headers, timeout=5).ok
     except requests.RequestException:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _server_up(), reason=f"no qdrant at {QDRANT_URL}")
+pytestmark = pytest.mark.skipif(
+    not _fleet_reachable(), reason="no reachable fleet (QDRANT_URL) in .env"
+)
 
 
 class Geometry:
@@ -60,7 +69,7 @@ class Device:
         self.store = Store(tmp_path / name, dim=DIM, with_immutable=True)
         self.core = Core(self.store, device_name=name, on_event=self.events.append)
         self.core.start()
-        self.client = FleetClient(QDRANT_URL, None, collection=collection, dim=DIM)
+        self.client = FleetClient(QDRANT_URL, QDRANT_KEY, collection=collection, dim=DIM)
         self.sync = SyncManager(self.core, self.client, on_event=self.events.append, interval=3600)
 
     def teach_direct(self, label: str, concept: str, n_views: int = 3, oid: str | None = None):

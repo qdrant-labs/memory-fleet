@@ -61,6 +61,34 @@ def test_dedup_after_pull_pushed_leaves_unpushed_survives(hf):
     assert hf.store.get_object(local_id) is not None
 
 
+def test_local_edit_after_push_survives_the_next_pull(hf):
+    """Codex finding: a pushed object edited locally must NOT be deleted by
+    dedup — the edit clears t_sync (content no longer matches the fleet)."""
+    from fleetmemory.memory.core import Rename
+
+    pid = new_id()
+    rows = [hf.geo.view("badge", 0.98)]
+    hf.store.upsert_object(pid, "badge", rows, [{"view_id": "b0", "human": True}], t_sync=1000.0)
+    hf.seed_immutable(pid, "badge", rows)  # the pull delivered the pushed copy
+    hf.send(Rename(object_id=pid, label="my badge"))  # local edit AFTER the push
+    assert hf.store.dedup_after_pull() == []  # edit made it dirty: survives
+    payload, _ = hf.store.get_object(pid)
+    assert payload["label"] == "my badge" and "t_sync" not in payload
+
+
+def test_same_id_mutable_beats_higher_scoring_mirror_copy(hf):
+    """Mutable copy is the local truth for a shared id, even when the older
+    mirror copy scores higher on this particular query."""
+    pid = new_id()
+    close = hf.geo.view("badge", 0.99)
+    far = hf.geo.view("badge", 0.7)
+    hf.seed_immutable(pid, "badge (stale fleet)", [close])  # scores higher...
+    hf.store.upsert_object(pid, "badge", [far], [{"view_id": "v", "human": True}])
+    res = hf.store.recognize(hf.geo.view("badge", 0.98))
+    hit = next(c for c in res.candidates if c.id == pid)
+    assert hit.from_mutable and hit.label == "badge"
+
+
 def test_stamped_but_not_yet_mirrored_survives(hf):
     """t_sync alone must not kill a point: if the push landed but the pull hasn't
     delivered it yet, deleting would lose the object entirely."""

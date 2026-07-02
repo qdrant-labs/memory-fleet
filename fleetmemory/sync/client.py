@@ -60,6 +60,7 @@ class FleetClient:
             info = self.client.get_collection(self.collection)
             vecs = info.config.params.vectors or {}
             if isinstance(vecs, dict) and "label_dense" in vecs:
+                self._ensure_indexes()
                 return
             if info.points_count == 0:
                 self.client.delete_collection(self.collection)
@@ -79,7 +80,15 @@ class FleetClient:
                 "label": models.SparseVectorParams(modifier=models.Modifier.IDF)
             },
         )
+        self._ensure_indexes()
         logger.info("fleet collection %r created", self.collection)
+
+    def _ensure_indexes(self):
+        # Cloud rejects filtered scrolls on unindexed payload keys; the
+        # label-fold push looks objects up by label_key (case-insensitive)
+        self.client.create_payload_index(
+            self.collection, "label_key", models.PayloadSchemaType.KEYWORD
+        )
 
     # ---------- pull (native snapshots) ----------
 
@@ -100,11 +109,17 @@ class FleetClient:
     # ---------- push (curated upsert) ----------
 
     def find_by_label(self, label: str):
-        """Exact-label fleet point (name == identity extended to the fleet) or None."""
+        """The fleet point carrying this label, or None. Matches on label_key
+        (lowercased) so fleet identity is case-insensitive, same as on-device."""
         recs, _ = self.client.scroll(
             self.collection,
             scroll_filter=models.Filter(
-                must=[models.FieldCondition(key="label", match=models.MatchValue(value=label))]
+                must=[
+                    models.FieldCondition(
+                        key="label_key",
+                        match=models.MatchValue(value=label.strip().lower()),
+                    )
+                ]
             ),
             limit=1,
             with_payload=True,

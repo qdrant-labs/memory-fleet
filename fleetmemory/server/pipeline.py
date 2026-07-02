@@ -4,6 +4,7 @@ this file is scheduling and plumbing only.
 """
 
 import base64
+import contextlib
 import logging
 import queue
 import threading
@@ -80,7 +81,8 @@ class Pipeline:
         self.embedder = Embedder()
         self.scheduler = EmbedScheduler()
         self.burst_tids: set[int] = set()  # updated from core events (GIL-safe set ops)
-        self._embed_q: queue.Queue = queue.Queue()
+        # bounded: if the embed thread dies or stalls, crops must not pile up forever
+        self._embed_q: queue.Queue = queue.Queue(maxsize=16)
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._frame_count = 0
@@ -108,10 +110,15 @@ class Pipeline:
 
     def stop(self):
         self._stop.set()
-        self._embed_q.put(None)
+        with contextlib.suppress(queue.Full):
+            self._embed_q.put_nowait(None)
         for t in self._threads:
             t.join(timeout=5)
-        self.source.close()
+        # only close from here if the capture thread is truly gone — it closes
+        # the source itself on exit, and yanking cv2 out from under a live
+        # read() crashes (slow first-run warm can outlive the join timeout)
+        if not any(t.is_alive() for t in self._threads):
+            self.source.close()
 
     def set_active(self, on: bool):
         """First viewer connects -> camera on; last one leaves -> camera released."""
@@ -143,7 +150,12 @@ class Pipeline:
     # -- capture thread --
 
     def _capture_loop(self):
-        self.detector.warm()
+        try:
+            self.detector.warm()
+        except Exception:
+            logger.exception("detector failed to load")
+            self.broadcast({"type": "error", "message": "detector failed to load — see server log"})
+            return
         src_open = False
         while not self._stop.is_set():
             if not self._active.is_set():
@@ -158,6 +170,8 @@ class Pipeline:
                     self._stop.wait(2.0)  # retry while a viewer is connected
                     continue
                 src_open = True
+                if not self.drive_mode:
+                    self.detector.reset()  # fresh tracker state for the new camera session
             frame = self.source.read()
             if frame is None:
                 if self.drive_mode:
@@ -191,7 +205,8 @@ class Pipeline:
                 q = crop_quality(frame, p.box, p.conf)
                 jobs.append((p.tid, due[p.tid], crop, q, now))
         if jobs:
-            self._embed_q.put(jobs)
+            with contextlib.suppress(queue.Full):  # shed embeds rather than balloon
+                self._embed_q.put_nowait(jobs)
 
         self.broadcast(
             {
@@ -229,7 +244,14 @@ class Pipeline:
     # -- embed thread --
 
     def _embed_loop(self):
-        self.embedder.load()
+        try:
+            self.embedder.load()
+        except Exception:
+            logger.exception("embedder failed to load")
+            self.broadcast({"type": "error", "message": "embedder failed to load — see server log"})
+            while not self._stop.is_set():  # keep draining so the queue can't grow
+                self._embed_q.get()
+            return
         while not self._stop.is_set():
             jobs = self._embed_q.get()
             if jobs is None:

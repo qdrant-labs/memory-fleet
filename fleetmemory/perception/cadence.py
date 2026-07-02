@@ -63,6 +63,13 @@ class EmbedScheduler:
         to_embed: list[Incarnation] = []
         for tid in visible_tids:
             st = self._tracks.get(tid)
+            if st is not None and now - st.last_seen > self.dead_after:
+                # ticks paused (camera off) and the tracker re-emitted the same
+                # tid: that's a NEW incarnation, not a continuation — the old
+                # binding must not leak onto whatever object holds the tid now
+                died.append(Incarnation(tid, st.epoch))
+                del self._tracks[tid]
+                st = None
             if st is None:
                 self._next_epoch += 1
                 st = _TrackState(epoch=self._next_epoch)

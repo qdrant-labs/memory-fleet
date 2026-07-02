@@ -8,6 +8,7 @@ saw, and mismatches are dropped.
 """
 
 import base64
+import contextlib
 import logging
 import queue
 import shutil
@@ -31,11 +32,21 @@ BURST_SECONDS = 3.0  # ...or this much time
 ARCHIVE_CAP = 12  # departed unknowns kept teachable (wrist goes down, watch stays)
 
 
+def _push_fingerprint(payload: dict) -> tuple:
+    """Identity of a point's pushable content: label + exact view rows + negatives."""
+    return (
+        payload.get("label", ""),
+        tuple(v.get("view_id", "") for v in payload.get("views") or []),
+        len(payload.get("neg") or []),
+    )
+
+
 def fold_rows(krows: list, kviews: list, frows: list, fviews: list) -> tuple[list, list]:
     """Fold f's exemplar rows into k's: human rows first, diversity-gated, capped.
     Used by merge and by the fleet label-fold push (§3.6). Returns (rows, views)."""
     krows, kviews = list(krows), list(kviews)
-    order = sorted(range(len(frows)), key=lambda i: not fviews[i].get("human"))
+    n = min(len(frows), len(fviews))  # defensive: never index past shorter metadata
+    order = sorted(range(n), key=lambda i: not fviews[i].get("human"))
     for i in order:
         if len(krows) >= VIEW_CAP:
             break
@@ -386,7 +397,7 @@ class Core:
             device=payload.get("device", ""),
             event=payload.get("event", ""),
             t_created=payload.get("t_created"),
-            t_sync=payload.get("t_sync"),
+            t_sync=None,  # local edit: content no longer matches the fleet copy
             thumb=payload.get("thumb", ""),
             base_payload=payload,
         )
@@ -479,7 +490,7 @@ class Core:
                 device=payload.get("device", ""),
                 event=payload.get("event", ""),
                 t_created=payload.get("t_created"),
-                t_sync=payload.get("t_sync"),
+                t_sync=None,  # local edit: content no longer matches the fleet copy
                 thumb=payload.get("thumb", ""),
                 base_payload=payload,
             )
@@ -568,7 +579,7 @@ class Core:
             device=kp.get("device", ""),
             event=kp.get("event", ""),
             t_created=kp.get("t_created"),
-            t_sync=kp.get("t_sync"),
+            t_sync=None,  # merged content no longer matches the fleet copy
             thumb=kp.get("thumb", "") or fp.get("thumb", ""),
             base_payload=kp,
         )
@@ -606,8 +617,9 @@ class Core:
             device=payload.get("device", ""),
             event=payload.get("event", ""),
             t_created=payload.get("t_created"),
-            t_sync=payload.get("t_sync"),
+            t_sync=None,  # local edit: content no longer matches the fleet copy
             thumb=payload.get("thumb", ""),
+            base_payload=payload,
         )
         for tid, ts in self.tracks.items():
             if ts.object_id == m.object_id:
@@ -639,8 +651,9 @@ class Core:
             device=payload.get("device", ""),
             event=payload.get("event", ""),
             t_created=payload.get("t_created"),
-            t_sync=payload.get("t_sync"),
+            t_sync=None,  # local edit: content no longer matches the fleet copy
             thumb=payload.get("thumb", ""),
+            base_payload=payload,
         )
         self._emit({"type": "object_updated", "object_id": m.object_id, "views": len(views)})
 
@@ -805,9 +818,18 @@ class Core:
 
     def _on_manifestrequest(self, m: ManifestRequest):
         manifest = None
-        if self.store.immutable is not None:
-            manifest = self.store.immutable.snapshot_manifest()
-        m.reply.put(manifest)
+        try:
+            if self.store.immutable is not None:
+                manifest = self.store.immutable.snapshot_manifest()
+        except Exception:
+            # damaged mirror: rebuild it (disposable replica) rather than
+            # leaving the sync worker timing out on every pull forever
+            logger.exception("manifest failed; rebuilding the fleet mirror")
+            self.store.reset_immutable()
+            with contextlib.suppress(Exception):
+                manifest = self.store.immutable.snapshot_manifest()
+        finally:
+            m.reply.put(manifest)
 
     def _on_preparepush(self, m: PreparePush):
         out = []
@@ -818,17 +840,21 @@ class Core:
             payload, rows = got
             if payload.get("kind") != "object" or payload.get("synthetic"):
                 continue  # blocklist entries and stunt synthetics never reach the fleet
+            views = list(payload.get("views") or [])
             out.append(
                 {
                     "id": oid,
                     "label": payload.get("label", ""),
                     "rows": rows,
-                    "views": list(payload.get("views") or []),
+                    "views": views,
                     "neg": list(payload.get("neg") or []),
                     "thumb": payload.get("thumb", ""),
                     "device": payload.get("device", ""),
                     "event": payload.get("event", ""),
                     "t_created": payload.get("t_created"),
+                    # what exactly went over the wire — MarkPushed must not stamp
+                    # a point the user edited while the network push was in flight
+                    "fingerprint": _push_fingerprint(payload),
                 }
             )
         m.reply.put(out)
@@ -836,8 +862,13 @@ class Core:
     def _on_markpushed(self, m: MarkPushed):
         for it in m.items:
             old_id = it["old_id"]
-            if "fleet_id" in it:  # label-fold: local point rewritten under the fleet id
-                self.store.delete(old_id)
+            got = self.store.get_object(old_id, with_vectors=False)
+            if got is not None and it.get("fingerprint") is not None:
+                if _push_fingerprint(got[0]) != it["fingerprint"]:
+                    continue  # edited mid-push: stays dirty, next push carries the edit
+            if "fleet_id" in it and it["fleet_id"] != old_id:
+                # label-fold: rewrite under the fleet id — upsert FIRST, delete
+                # after, so a failure never loses the local teaching
                 self.store.upsert_object(
                     it["fleet_id"],
                     it["label"],
@@ -849,9 +880,22 @@ class Core:
                     thumb=it.get("thumb", ""),
                     t_sync=it["t_sync"],
                 )
+                self.store.delete(old_id)
                 for ts in self.tracks.values():
                     if ts.object_id == old_id:
                         ts.object_id = it["fleet_id"]
+            elif "fleet_id" in it:  # same-id fold: merged content, same point
+                self.store.upsert_object(
+                    it["fleet_id"],
+                    it["label"],
+                    it["rows"],
+                    it["views"],
+                    neg=it.get("neg"),
+                    device=self.device_name,
+                    event=self.event_tag,
+                    thumb=it.get("thumb", ""),
+                    t_sync=it["t_sync"],
+                )
             else:
                 self.store.set_payload(old_id, {"t_sync": it["t_sync"]})
         self._emit({"type": "push_done", "count": len(m.items)})

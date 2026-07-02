@@ -27,9 +27,9 @@ shared.
   fleet collection, synced by native partial snapshots. Nothing reaches the
   fleet uncurated: review, prune bad views, then push. Same-name objects from
   different devices fold into one fleet point.
-- **No fleet configured, no problem.** Without `QDRANT_URL` the demo runs fully
-  local. The fleet target is any Qdrant server: Qdrant Cloud or the bundled
-  Docker compose file.
+- **Local first.** Without `QDRANT_URL` (or without wifi) the demo runs fully
+  on-device. The fleet lives in Qdrant Cloud and reconnects on its own when
+  reachable — a bonus, never a dependency.
 
 ## Quickstart
 
@@ -40,11 +40,10 @@ make setup          # install (first run downloads model weights, ~500 MB)
 make run            # http://127.0.0.1:8765
 ```
 
-Optional fleet sync:
+Optional fleet sync (local-first: an unreachable fleet degrades gracefully):
 
 ```bash
-make fleet-up       # local Qdrant in Docker (or point .env at Qdrant Cloud)
-cp .env.example .env  # set QDRANT_URL (+ QDRANT_API_KEY for Cloud)
+cp .env.example .env  # set QDRANT_URL + QDRANT_API_KEY (Qdrant Cloud)
 make run
 make run-b          # second "device" on the same laptop (own port + data dir)
 ```
@@ -84,6 +83,6 @@ Layer map in `PLAN.md` (the build contract), spike evidence in `docs/spikes/`.
 make test    # deterministic core gate: mock geometry, real Edge shards
 make smoke   # real models over a bundled clip
 make soak    # 10-minute live pipeline soak, >= 2 fps required
-uv run pytest tests/sync  # fleet round-trip against Docker Qdrant
+make test-sync            # fleet round-trip against the Cloud cluster in .env
 uv run pytest tests/drive # headless WebSocket drive of the real server
 ```

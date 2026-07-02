@@ -40,6 +40,18 @@ real teaching session), README demo-script rehearsal, second-laptop test.
 
 - **No CI** (Dylan): single-builder repo. Run lint + `tests/gate` +
   `tests/sync` before every commit instead.
+- **The fleet is Qdrant Cloud, full stop — no Docker anywhere** (Dylan,
+  2026-07-01). Local-first: unreachable fleet = "FLEET OFFLINE" pill, silent
+  auto-reconnect, status events on transitions only. `tests/sync` runs
+  against the Cloud cluster in `.env` (throwaway `fm-test-*` collections,
+  deleted in teardown; skipped when no `.env`). Cloud requires payload
+  indexes for filtered scrolls (`label_key`, keyword).
+- **Any local edit clears `t_sync`** (Codex review, 2026-07-01): a pushed
+  object edited locally is dirty again, or the next pull's dedup would
+  delete the edit. `MarkPushed` skips stamping if the point's fingerprint
+  changed mid-push. Fleet label identity is case-insensitive via
+  `label_key`; pushes ALWAYS fold with the existing fleet point (even
+  same-id — another device may have grown it).
 - **Person/body-part suppression** (Dylan): detector class names ARE consulted
   — solely to drop people/hands/faces proposals (`PERSON_WORDS` in
   `detector.py`). Names still come from vector search only.
