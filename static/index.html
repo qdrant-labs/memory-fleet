@@ -113,6 +113,14 @@
     </div>
 
     <div class="setting">
+      <label>MAX OBJECT SIZE <b id="v-area"></b></label>
+      <input type="range" id="s-area" min="0.05" max="0.60" step="0.01">
+      <p class="tune-hint">Biggest region worth tracking, as a share of the frame.
+      Anything larger is treated as scenery and skipped. Raise it to teach
+      big items held close to the camera; lower it if empty phantom boxes appear.</p>
+    </div>
+
+    <div class="setting">
       <label>RECOGNIZE ABOVE <b id="v-same"></b></label>
       <input type="range" id="s-same" min="0.5" max="0.99" step="0.01">
       <p class="tune-hint">Similarity needed to name an object on its own.

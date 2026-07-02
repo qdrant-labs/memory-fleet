@@ -43,7 +43,7 @@ const handlers = {
     setCamera(m.camera !== false);
     S.memories = m.memories;
     bumpCounts();
-    initSliders(m.thresholds, m.detector_conf);
+    initSliders(m.thresholds, m.detector_conf, m.detector_max_area ?? 0.2);
     send({ cmd: "inventory" });
     send({ cmd: "map" });
   },
@@ -732,12 +732,13 @@ $("btn-merge").onclick = () => {
 };
 
 // ---------- tuning ----------
-function initSliders(t, conf) {
-  const wire = (id, vid, val, fn) => {
+function initSliders(t, conf, maxArea) {
+  const wire = (id, vid, val, fn, fmt) => {
     const el = $(id);
+    const show = fmt || ((v) => (+v).toFixed(2));
     el.value = val;
-    $(vid).textContent = (+val).toFixed(2);
-    el.oninput = () => { $(vid).textContent = (+el.value).toFixed(2); fn(); tierBand(); };
+    $(vid).textContent = show(val);
+    el.oninput = () => { $(vid).textContent = show(el.value); fn(); tierBand(); };
   };
   const sendT = () => send({ cmd: "thresholds", s_same: +$("s-same").value,
                              s_suggest: +$("s-suggest").value, s_ignore: +$("s-ignore").value });
@@ -745,6 +746,8 @@ function initSliders(t, conf) {
   wire("s-suggest", "v-suggest", t.s_suggest, sendT);
   wire("s-ignore", "v-ignore", t.s_ignore, sendT);
   wire("s-conf", "v-conf", conf, () => send({ cmd: "conf", value: +$("s-conf").value }));
+  wire("s-area", "v-area", maxArea, () => send({ cmd: "max_area", value: +$("s-area").value }),
+       (v) => `${Math.round(v * 100)}% of frame`);
   tierBand();
 }
 function tierBand() {

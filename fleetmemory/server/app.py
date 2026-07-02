@@ -133,6 +133,7 @@ def _hello(app) -> dict:
         "memories": app.state.store.count(),
         "thresholds": {"s_same": t.s_same, "s_suggest": t.s_suggest, "s_ignore": t.s_ignore},
         "detector_conf": app.state.pipeline.detector.conf,
+        "detector_max_area": app.state.pipeline.detector.max_area,
         "camera": app.state.pipeline.user_enabled,
     }
 
@@ -148,6 +149,9 @@ def _dispatch(app, m: dict):
         return
     if cmd == "conf":
         pipeline.detector.conf = float(m["value"])
+        return
+    if cmd == "max_area":
+        pipeline.detector.max_area = float(m["value"])
         return
     if cmd == "camera":
         pipeline.set_user_enabled(bool(m.get("on")))

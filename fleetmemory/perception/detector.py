@@ -35,10 +35,10 @@ DEFAULT_CONF = 0.30  # spike used 0.25; expected to tune up on live webcam scene
 MIN_AREA, MAX_AREA = 0.0008, 0.20
 
 
-def area_band_ok(box: tuple[float, float, float, float]) -> bool:
+def area_band_ok(box: tuple[float, float, float, float], max_area: float = MAX_AREA) -> bool:
     """box is (x1, y1, x2, y2) normalized to [0, 1]."""
     area = (box[2] - box[0]) * (box[3] - box[1])
-    return MIN_AREA <= area <= MAX_AREA
+    return MIN_AREA <= area <= max_area
 
 
 # People and body parts are suppressed at the proposal level (Dylan, 2026-07-01):
@@ -74,6 +74,7 @@ class Detector:
         self.model = None
         self.device = None
         self.conf = conf  # live-tunable
+        self.max_area = MAX_AREA  # live-tunable: biggest proposal kept, frame fraction
 
     def load(self):
         if self.model is not None:
@@ -124,7 +125,7 @@ class Detector:
             for i, (tid, cls, cf, xyxy) in enumerate(quads):
                 x1, y1, x2, y2 = (float(v) for v in xyxy)
                 box = (x1 / w, y1 / h, x2 / w, y2 / h)
-                if not area_band_ok(box):
+                if not area_band_ok(box, self.max_area):
                     continue
                 if is_person_like(result.names.get(int(cls), "")):
                     continue

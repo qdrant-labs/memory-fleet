@@ -8,6 +8,9 @@ def test_area_band_rejects_specks_and_room_blobs():
     assert not area_band_ok((0.5, 0.5, 0.51, 0.51))  # speck
     assert not area_band_ok((0.0, 0.0, 1.0, 0.9))  # room-spanning blob
     assert area_band_ok((0.4, 0.4, 0.6, 0.6))  # hand-held object
+    # the cap is live-tunable: a half-frame box passes only if the user raises it
+    assert not area_band_ok((0.2, 0.2, 0.8, 0.8))  # 36% of frame, default cap 20%
+    assert area_band_ok((0.2, 0.2, 0.8, 0.8), max_area=0.5)
 
 
 def test_track_embeds_only_after_stability():
