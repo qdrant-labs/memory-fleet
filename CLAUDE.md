@@ -78,6 +78,15 @@ real teaching session), README demo-script rehearsal, second-laptop test.
 - **Camera lifecycle**: capture runs only while a browser is connected AND
   the UI toggle is on. The Python process owns the camera (it IS the edge
   device); the browser is a dashboard.
+- **Suppression is two-tier** (Dylan, 2026-07-01: ignored doors/hair kept
+  returning): ≥ S_ignore hard-suppresses; ≥ S_IGNORE_SOFT (0.65) suppresses
+  UNLESS a taught object outranks it. Soft-suppressed boxes stay faint and
+  rescuable. Repeated ignores fold views into ONE blocklist entry
+  (IGNORE_FOLD). VIEW_CAP raised 12 → 24; at cap, a human view replaces the
+  most redundant auto view so confirms never stop teaching.
+- **Unknowns carry guesses**: top-3 nearest memories (teach-fold one-click)
+  + YOLOE class names (the ONLY other use of detector labels — hints, never
+  auto-naming).
 - **Label-fold push rewrites the local point under the fleet id** so the
   §3.3 id-present dedup applies verbatim on the next pull.
 - **Empty-delta pulls are skipped** (zero-byte body or tar without
