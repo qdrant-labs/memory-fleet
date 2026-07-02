@@ -112,10 +112,6 @@ const handlers = {
   object_updated(m) { if (m.views) memPulse(); refreshData(); },
   object_deleted() { refreshData(); },
   objects_merged() { toast("two memories merged into one"); refreshData(); },
-  rename_conflict(m) {
-    if (confirm(`«${m.label}» already exists — merge into it?`))
-      send({ cmd: "merge", keep_id: m.existing_id, fold_id: m.object_id });
-  },
   unknown_archived(m) {
     S.archived.set(`${m.tid}:${m.epoch}`, m);
     renderUnknownCount();

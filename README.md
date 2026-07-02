@@ -15,21 +15,30 @@ shared.
 ## How It Works
 
 - **Names come from vector search only.** The detector (YOLOE-11L prompt-free)
-  proposes boxes and masks; its labels are discarded. Recognition is one native
-  MAX_SIM query over multivector points (up to 12 views per object), embedded
-  with Unicom-ViT-B-32 via FastEmbed. Sub-millisecond at taught scale, under
-  3 ms against 100k memories (measured in `docs/spikes/`).
+  proposes boxes and masks; recognition is one native MAX_SIM query over
+  multivector points, embedded with Unicom-ViT-B-32 via FastEmbed.
+  Sub-millisecond at taught scale, under 3 ms against 300k memories
+  (measured in `docs/spikes/`). Detector class names appear only as
+  teach-time suggestion chips — a human always does the naming.
+- **An object is one physical thing.** Each point is one item with up to 24
+  views of it; the label is a display name and may repeat. Teach two
+  different watches as "watch" and you get two clean objects that both
+  answer to "watch" — re-teach the same watch and it folds into itself.
 - **Two-tier matching.** High similarity binds and shows the name. Borderline
   similarity asks: "looks like «mug», same?" One tap confirms or rejects.
-  Rejections become negative exemplars that veto future false matches.
+  Rejections become negative exemplars that veto future false matches, and
+  ignored looks are suppressed without ever silently eating a taught object.
+- **Hybrid search over everything learned.** miniCOIL sparse + dense text
+  embeddings, fused with reciprocal rank fusion, all on-device — with the
+  engine latency on screen. "Cup" finds the coffee mug.
 - **Local first, fleet by curation.** Every device runs two Edge shards: a
   mutable shard for local teachings and an immutable mirror of the central
-  fleet collection, synced by native partial snapshots. Nothing reaches the
-  fleet uncurated: review, prune bad views, then push. Same-name objects from
-  different devices fold into one fleet point.
-- **Local first.** Without `QDRANT_URL` (or without wifi) the demo runs fully
-  on-device. The fleet lives in Qdrant Cloud and reconnects on its own when
-  reachable — a bonus, never a dependency.
+  fleet collection, synced by Edge's native partial snapshots. Nothing
+  reaches the fleet uncurated: review, prune bad views, then push. The same
+  item pushed from two devices folds into one fleet point.
+- **The fleet is a bonus, never a dependency.** Without `QDRANT_URL` (or
+  without wifi) everything runs fully on-device; the Qdrant Cloud fleet
+  reconnects on its own when reachable.
 
 ## Quickstart
 
@@ -56,9 +65,9 @@ make run-b          # second "device" on the same laptop (own port + data dir)
    3-second capture burst. It now recognizes the item from any side.
 3. **Speed.** The HUD strip shows every recognition query: microseconds to
    low milliseconds, on-device, no server.
-4. **Scale.** Press `S` to swap in the prebuilt 100k-memory shard ("what if
-   this robot had been running for a year?"). Watch the latency barely move.
-   Build it once with `make demo-scale`.
+4. **Scale.** Press `S` to attach the prebuilt stunt shard: 300,000 memories
+   ("what if this robot had been running for a year?"). Watch the latency
+   barely move. Build it once with `make demo-scale`.
 5. **The fleet.** Open inventory, prune a bad view, push. On the second
    device: pull, and it recognizes everything the first device taught.
    Every robot you ship knows what any of them ever learned.

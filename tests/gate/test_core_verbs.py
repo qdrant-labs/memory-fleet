@@ -52,13 +52,30 @@ def test_taught_object_recognized_on_new_track(h):
     assert (ev["tid"], ev["state"], ev["label"]) == (2, "recognized", "red mug")
 
 
-def test_teach_same_label_folds_not_duplicates(h):
+def test_reteaching_the_same_item_folds(h):
+    """Instance model: same name AND it looks like that object -> fold."""
     oid = teach_and_burst(h, 1, "mug", "red mug")
-    h.ingest(2, h.geo.view("mug2", 0.9))  # a different-looking item...
-    h.send(Teach(tid=2, epoch=1, label="red mug"))  # ...taught the same name
-    assert h.track_state(2).object_id == oid  # name == identity
+    h.ingest(2, h.geo.view("mug", 0.85))  # the same mug, seen again
+    h.send(Teach(tid=2, epoch=1, label="red mug"))
+    assert h.track_state(2).object_id == oid
     assert len(h.all("object_created")) == 1
     assert len(h.store.scroll_objects(mutable_only=True)) == 1
+
+
+def test_different_item_with_same_name_is_its_own_instance(h):
+    """Instance model (Dylan, 2026-07-01): five different watches are five
+    clean objects, all displayed as "watch" — never a melting-pot point."""
+    a = teach_and_burst(h, 1, "watch-a", "watch")
+    h.ingest(2, h.geo.view("watch-b", 0.9))  # a DIFFERENT-looking watch
+    h.send(Teach(tid=2, epoch=1, label="watch"))
+    b = h.track_state(2).object_id
+    assert b != a
+    objs = h.store.scroll_objects(mutable_only=True)
+    assert len(objs) == 2 and all(pl["label"] == "watch" for _, pl, _ in objs)
+    # each instance recognizes its own looks, both answer to "watch"
+    h.ingest(3, h.geo.view("watch-b", 0.95))
+    ev = h.last("track_update")
+    assert (ev["state"], ev["label"], ev["object_id"]) == ("recognized", "watch", b)
 
 
 def test_burst_ends_by_timeout_with_undiverse_views(h):
@@ -169,15 +186,14 @@ def test_merge_folds_views_and_rebinds_tracks(h):
     assert ev["state"] == "recognized" and ev["label"] == "mug A"
 
 
-def test_rename_and_rename_conflict(h):
+def test_rename_updates_label_and_repeats_are_legal(h):
     a = teach_and_burst(h, 1, "mug", "mug A", views=1)
     b = teach_and_burst(h, 2, "pen", "pen", views=1)
     h.send(Rename(object_id=a, label="my mug"))
     assert h.store.get_object(a)[0]["label"] == "my mug"
     assert h.track_state(1).label == "my mug"
-    h.send(Rename(object_id=b, label="my mug"))  # collides -> prompts a merge instead
-    assert h.last("rename_conflict")["existing_id"] == a
-    assert h.store.get_object(b)[0]["label"] == "pen"  # unchanged
+    h.send(Rename(object_id=b, label="my mug"))  # display names may repeat
+    assert h.store.get_object(b)[0]["label"] == "my mug"
 
 
 def test_prune_removes_exactly_the_named_view(h):

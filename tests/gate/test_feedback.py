@@ -58,9 +58,9 @@ def test_departed_unknown_stays_teachable(h):
 def test_departed_unknown_can_fold_into_existing_label(h):
     h.ingest(1, h.geo.view("mug"))
     h.send(Teach(tid=1, epoch=1, label="mug"))
-    h.ingest(2, h.geo.view("mug2"))
+    h.ingest(2, h.geo.view("mug", 0.8))  # the same mug, briefly out of frame
     h.send(TrackDied(tid=2, epoch=2))
-    h.send(Teach(tid=2, epoch=2, label="mug"))  # same name: folds, no duplicate
+    h.send(Teach(tid=2, epoch=2, label="mug"))  # same name + same look: folds
     assert len(h.store.scroll_objects(mutable_only=True)) == 1
 
 

@@ -108,9 +108,9 @@ class FleetClient:
 
     # ---------- push (curated upsert) ----------
 
-    def find_by_label(self, label: str):
-        """The fleet point carrying this label, or None. Matches on label_key
-        (lowercased) so fleet identity is case-insensitive, same as on-device."""
+    def find_by_label(self, label: str, limit: int = 8) -> list:
+        """Fleet points carrying this label (instance model: several distinct
+        items may share a display name). Case-insensitive via label_key."""
         recs, _ = self.client.scroll(
             self.collection,
             scroll_filter=models.Filter(
@@ -121,11 +121,11 @@ class FleetClient:
                     )
                 ]
             ),
-            limit=1,
+            limit=limit,
             with_payload=True,
             with_vectors=True,
         )
-        return recs[0] if recs else None
+        return recs
 
     def upsert_object(self, point_id: str, label: str, rows: list, payload: dict):
         vector = {"exemplars": [list(map(float, r)) for r in rows]}

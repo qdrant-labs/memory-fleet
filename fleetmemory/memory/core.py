@@ -449,10 +449,10 @@ class Core:
             self._emit({"type": "error", "message": "teach needs a label and a seen track"})
             return
 
-        existing = self.store.find_label(label)
+        existing = self._fold_target(label, ts.last_vec)
         now = ts.last_seen
         if existing:
-            # name == identity: fold into the object already carrying this label
+            # same name AND it looks like that object: the same item re-taught
             object_id = existing
             fake = Ingest(m.tid, m.epoch, ts.last_vec, ts.last_thumb, ts.last_quality, now)
             self._maybe_accrete(object_id, fake, human=True)
@@ -479,6 +479,22 @@ class Core:
         ts.burst_want, ts.burst_have = BURST_VIEWS, 0
         self._track_event(m.tid, ts)
         self._emit_stats()
+
+    def _fold_target(self, label: str, vec: np.ndarray) -> str | None:
+        """Instance identity (Dylan, 2026-07-01): an object is one physical
+        thing; the label is its display name and may repeat. Teaching folds
+        into a same-name object ONLY when the view plausibly IS that object
+        (>= s_suggest to its views) — otherwise it's a new instance. Five
+        different watches = five clean points, all called "watch"."""
+        best, best_sim = None, 0.0
+        for pid, _pl in self.store.find_label_points(label):
+            rows = self.store.get_rows(pid)
+            if not rows:
+                continue
+            sim = max(float(vec @ r) for r in rows)
+            if sim > best_sim:
+                best, best_sim = pid, sim
+        return best if best_sim >= self.thresholds.s_suggest else None
 
     def _burst_step(self, tid: int, ts: TrackState, m: Ingest):
         if self._maybe_accrete(ts.object_id, m, human=True):
@@ -634,20 +650,10 @@ class Core:
         self._emit_stats()
 
     def _on_rename(self, m: Rename):
+        # labels are display names and may repeat (instance model) — no conflict
         label = m.label.strip()
         got = self.store.get_object(m.object_id)
         if not label or got is None:
-            return
-        other = self.store.find_label(label)
-        if other and other != m.object_id:
-            self._emit(
-                {
-                    "type": "rename_conflict",
-                    "object_id": m.object_id,
-                    "label": label,
-                    "existing_id": other,
-                }
-            )
             return
         payload, rows = got
         self.store.upsert_object(
@@ -727,7 +733,7 @@ class Core:
         label = m.label.strip()
         if not label:
             return
-        existing = self.store.find_label(label)
+        existing = self._fold_target(label, ts.last_vec)
         if existing:
             fake = Ingest(m.tid, m.epoch, ts.last_vec, ts.last_thumb, ts.last_quality, ts.last_seen)
             self._maybe_accrete(existing, fake, human=True)

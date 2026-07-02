@@ -335,11 +335,21 @@ class Store:
         return out
 
     def find_label(self, label: str) -> str | None:
-        """name == identity: the mutable object currently carrying this label."""
-        for pid, pl, _ in self.scroll_objects(mutable_only=True):
-            if pl.get("label", "").strip().lower() == label.strip().lower():
-                return pid
-        return None
+        """Identity == label: A mutable object currently carrying this label
+        (there may be several sibling buckets; this returns the first)."""
+        pids = self.find_label_points(label)
+        return pids[0][0] if pids else None
+
+    def find_label_points(self, label: str) -> list[tuple[str, dict]]:
+        """All mutable points carrying this label — identity is the LABEL;
+        points are ≤VIEW_CAP-view buckets of it (hive scale: a name grows by
+        adding sibling points, never by unbounded multivectors)."""
+        needle = label.strip().lower()
+        return [
+            (pid, pl)
+            for pid, pl, _ in self.scroll_objects(mutable_only=True)
+            if pl.get("label", "").strip().lower() == needle
+        ]
 
     # ---------- map support (decorative, off the hot path) ----------
 

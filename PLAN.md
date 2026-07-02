@@ -54,6 +54,13 @@ are — and the memory is shared.*
 - **name == identity** for human corrections: teaching a name that already
   exists folds the item into that object. Kills duplicates; accepted cost:
   two intentionally-distinct items can't share a name (use "mug A"/"mug B").
+  > **Amendment (2026-07-01, Dylan): replaced by INSTANCE identity.** A point
+  > is one physical thing; labels are display names and may repeat. Teach
+  > folds into a same-name object only when the view visually matches it
+  > (≥ s_suggest); otherwise it becomes a new instance. Same rule gates the
+  > fleet fold at push time. This removes the melting-pot failure for generic
+  > names ("watch") and gives unbounded fleet scale; the duplicate-killing
+  > intent survives via the similarity gate + merge.
 - **Masked crops**: flatten background to neutral gray inside the segmentation
   polygon before embedding. This is what makes recognition survive background
   and hand changes (v1-proven).

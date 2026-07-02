@@ -43,7 +43,9 @@ def test_dedup_pushed_leaves_unpushed_survives(fleet):
     assert res.candidates[0].from_mutable
 
 
-def test_two_devices_same_label_fold_one_fleet_point(fleet):
+def test_two_devices_same_item_folds_one_fleet_point(fleet):
+    """Instance model: the SAME physical mug seen by two devices folds into one
+    fleet point (same name + it looks like it)."""
     a, b = fleet("unit-a"), fleet("unit-b")
     a.sync.client.ensure_collection()
     a.sync.push([a.teach_direct("coffee mug", "mug", n_views=3)])
@@ -51,14 +53,13 @@ def test_two_devices_same_label_fold_one_fleet_point(fleet):
 
     b.sync.pull_once()
     b.wait_event("pull_applied")
-    # B teaches the same name on its own views, pushes -> §3.6 label-fold
-    b_oid = b.teach_direct("coffee mug", "mug-b-views", n_views=3)
+    b_oid = b.teach_direct("coffee mug", "mug", n_views=3)  # same mug, B's angles
     b.sync.push([b_oid])
     b.wait_event("push_done")
 
     recs, _ = b.client.client.scroll(b.client.collection, limit=100, with_payload=True)
     mugs = [r for r in recs if (r.payload or {}).get("label") == "coffee mug"]
-    assert len(mugs) == 1, "same label from two devices must fold into ONE fleet point"
+    assert len(mugs) == 1, "the same item from two devices must fold into ONE fleet point"
     assert len(mugs[0].payload["views"]) >= 4  # carries views of both devices
 
     # B's local copy was rewritten under the fleet id; next pull dedups it away
@@ -70,6 +71,20 @@ def test_two_devices_same_label_fold_one_fleet_point(fleet):
     assert local_copy is None  # deduped: mirror now carries it
     res = b.recognize("mug")
     assert res.candidates and res.candidates[0].label == "coffee mug"
+
+
+def test_different_items_same_name_stay_separate_fleet_points(fleet):
+    """Two DIFFERENT mugs both called "coffee mug" are two fleet points —
+    a shared display name must not melt distinct items together."""
+    a, b = fleet("unit-a"), fleet("unit-b")
+    a.sync.client.ensure_collection()
+    a.sync.push([a.teach_direct("coffee mug", "mug-red", n_views=3)])
+    a.wait_event("push_done")
+    b.sync.push([b.teach_direct("coffee mug", "mug-blue", n_views=3)])
+    b.wait_event("push_done")
+    recs, _ = b.client.client.scroll(b.client.collection, limit=100, with_payload=True)
+    mugs = [r for r in recs if (r.payload or {}).get("label") == "coffee mug"]
+    assert len(mugs) == 2
 
 
 def test_blocklist_never_pushed(fleet):

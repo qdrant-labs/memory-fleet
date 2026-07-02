@@ -49,9 +49,16 @@ real teaching session), README demo-script rehearsal, second-laptop test.
 - **Any local edit clears `t_sync`** (Codex review, 2026-07-01): a pushed
   object edited locally is dirty again, or the next pull's dedup would
   delete the edit. `MarkPushed` skips stamping if the point's fingerprint
-  changed mid-push. Fleet label identity is case-insensitive via
-  `label_key`; pushes ALWAYS fold with the existing fleet point (even
-  same-id — another device may have grown it).
+  changed mid-push. Fleet label matching is case-insensitive via `label_key`.
+- **INSTANCE identity, not name==identity** (Dylan, 2026-07-01 — REPLACES
+  PLAN §2's rule): a point is ONE physical thing (≤24 views of it); the
+  label is a display name and may repeat. Teach folds into a same-name
+  object only when the view is ≥ s_suggest to its rows (`_fold_target`);
+  otherwise it's a new instance. Same rule at push time (fleet fold is
+  similarity-gated; same-id always folds). Rename conflicts no longer
+  exist. Search/inventory show each instance separately — thumbnails
+  differentiate. Hive scale = unlimited instance points, never
+  melting-pot multivectors.
 - **Person/body-part suppression** (Dylan): detector class names ARE consulted
   — solely to drop people/hands/faces proposals (`PERSON_WORDS` in
   `detector.py`). Names still come from vector search only.

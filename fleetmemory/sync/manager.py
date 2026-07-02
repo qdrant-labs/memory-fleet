@@ -21,6 +21,7 @@ from fleetmemory.memory.core import (
     PreparePush,
     fold_rows,
 )
+from fleetmemory.memory.matcher import S_SUGGEST
 from fleetmemory.sync.client import FleetClient
 
 logger = logging.getLogger(__name__)
@@ -138,11 +139,20 @@ class SyncManager:
         items = []
         now = time.time()
         for o in objs:
-            existing = self.client.find_by_label(o["label"])
-            if existing is not None:
-                # name == identity extended to the fleet: fold into the fleet
-                # point — ALSO when the ids match, because another device may
-                # have grown that fleet point since we last pulled it
+            existing, existing_sim = None, 0.0
+            if o["rows"]:
+                ours = np.stack([np.asarray(r, dtype=np.float32) for r in o["rows"]])
+                for rec in self.client.find_by_label(o["label"]):
+                    frs = (rec.vector or {}).get("exemplars") or []
+                    if not frs:
+                        continue
+                    sim = float(np.max(ours @ np.asarray(frs, dtype=np.float32).T))
+                    if sim > existing_sim:
+                        existing, existing_sim = rec, sim
+            if existing is not None and (str(existing.id) == o["id"] or existing_sim >= S_SUGGEST):
+                # the SAME physical item already on the fleet (same id, or same
+                # name + it actually looks like it): fold views into that point.
+                # A same-named but different-looking item stays its own point.
                 frows = [
                     np.asarray(r, dtype=np.float32)
                     for r in (existing.vector or {}).get("exemplars", [])
