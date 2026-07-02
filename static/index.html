@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Memory</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">
+    <span class="brand-mark">◆</span>
+    <span class="brand-name">FLEET MEMORY</span>
+    <span class="brand-sub">shared object memory on Qdrant Edge</span>
+  </div>
+  <div class="top-status">
+    <span id="device-name" class="unit-chip">unit</span>
+    <span id="fleet-dot" class="fleet-dot off" title="fleet offline"></span>
+    <span id="fleet-label" class="fleet-label">fleet offline</span>
+    <button id="btn-pull" class="top-btn hidden" title="pull fleet memory now">⇣ pull</button>
+    <input id="search" type="search" placeholder="search memory…" autocomplete="off">
+    <button id="btn-unknowns" class="top-btn">? <b id="unknown-count">0</b></button>
+    <button id="btn-inventory" class="top-btn">inventory</button>
+    <button id="btn-map" class="top-btn">map</button>
+    <button id="btn-settings" class="top-btn">⚙</button>
+  </div>
+</header>
+
+<main id="stage">
+  <canvas id="view"></canvas>
+  <div id="no-feed">waiting for video…</div>
+
+  <div id="hud">
+    <div class="hud-block">
+      <div class="hud-big"><span id="hud-ms">–</span></div>
+      <div class="hud-cap">last recognition query</div>
+    </div>
+    <canvas id="spark" width="220" height="44"></canvas>
+    <div class="hud-block">
+      <div class="hud-big dim"><span id="hud-count">0</span></div>
+      <div class="hud-cap">memories searched</div>
+    </div>
+  </div>
+
+  <div id="popover" class="hidden"></div>
+  <div id="map-panel" class="hidden">
+    <div id="map-head">memory map <button id="map-close">×</button></div>
+    <canvas id="map-canvas" width="420" height="340"></canvas>
+  </div>
+  <div id="scale-banner" class="hidden">⚡ 100k-memory stunt shard active — press S to detach</div>
+</main>
+
+<aside id="drawer" class="hidden">
+  <div id="drawer-head">
+    <span id="drawer-title">unknowns</span>
+    <button id="drawer-close">×</button>
+  </div>
+  <div id="drawer-body"></div>
+  <div id="drawer-foot" class="hidden">
+    <button id="btn-merge" class="mini-btn" disabled>merge 2 selected</button>
+    <button id="btn-push" class="pop-btn" disabled>⛟ push to fleet</button>
+  </div>
+</aside>
+
+<aside id="settings" class="hidden">
+  <div id="drawer-head"><span>tuning</span><button id="settings-close">×</button></div>
+  <div class="setting"><label>recognize ≥ <b id="v-same"></b></label>
+    <input type="range" id="s-same" min="0.5" max="0.99" step="0.01"></div>
+  <div class="setting"><label>suggest ≥ <b id="v-suggest"></b></label>
+    <input type="range" id="s-suggest" min="0.3" max="0.9" step="0.01"></div>
+  <div class="setting"><label>suppress ≥ <b id="v-ignore"></b></label>
+    <input type="range" id="s-ignore" min="0.6" max="0.99" step="0.01"></div>
+  <div class="setting"><label>detector conf <b id="v-conf"></b></label>
+    <input type="range" id="s-conf" min="0.1" max="0.7" step="0.01"></div>
+</aside>
+
+<div id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
