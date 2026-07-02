@@ -24,7 +24,11 @@ from .store import Store, new_id
 
 logger = logging.getLogger(__name__)
 
-VIEW_CAP = 12  # exemplar rows per object, diversity-gated like v1
+# Exemplar rows per object, diversity-gated. Raised from the plan's ~12
+# (Dylan, 2026-07-01): one "watch" that should cover many watches needs the
+# room; MAX_SIM cost is negligible at these sizes (§9.4). When full, a new
+# HUMAN view replaces the most redundant auto view, so confirms keep teaching.
+VIEW_CAP = 24
 DIVERSITY_MAX = 0.95  # skip a new view too similar to a stored row
 NEG_CAP = 8
 BURST_VIEWS = 6  # teach burst: capture until this many views...
@@ -225,6 +229,7 @@ class TrackState:
     last_quality: float = 0.0
     last_seen: float = 0.0
     vetoed: set[str] = field(default_factory=set)
+    guesses: list = field(default_factory=list)  # nearest memories while unknown
     burst_until: float = 0.0
     burst_want: int = 0
     burst_have: int = 0
@@ -336,6 +341,18 @@ class Core:
         res = self.store.recognize(m.vec)
         self._emit({"type": "query", "tid": m.tid, "ms": res.latency_ms, "searched": res.searched})
         d = decide(m.vec, res.candidates, self.thresholds, ts.vetoed, self.session_negs)
+        # nearest memories, teachable one-click from the popover/drawer
+        seen: set[str] = set()
+        ts.guesses = []
+        for c in res.candidates:
+            if c.kind != "object" or c.payload.get("synthetic") or not c.label:
+                continue
+            if c.label.lower() in seen or c.score < 0.3:
+                continue
+            seen.add(c.label.lower())
+            ts.guesses.append({"label": c.label, "score": round(c.score, 2)})
+            if len(ts.guesses) == 3:
+                break
         self._apply_decision(m.tid, ts, d, m)
 
     def _apply_decision(self, tid: int, ts: TrackState, d: Decision, m: Ingest):
@@ -370,6 +387,7 @@ class Core:
                 "object_id": ts.object_id,
                 "label": ts.label,
                 "score": round(ts.score, 3),
+                "guesses": ts.guesses if ts.state == "unknown" else [],
             }
         )
 
@@ -380,14 +398,26 @@ class Core:
         if got is None:
             return False
         payload, rows = got
-        if len(rows) >= VIEW_CAP:
-            return False
         if rows and max(float(m.vec @ r) for r in rows) > DIVERSITY_MAX:
             return False
         view_id = uuid.uuid4().hex[:12]
         views = list(payload.get("views") or [])
-        rows.append(m.vec)
-        views.append({"view_id": view_id, "human": human})
+        if len(rows) >= VIEW_CAP:
+            # full: a human view may replace the most redundant auto view —
+            # otherwise "yes, same" would stop improving coverage forever
+            auto = [i for i, v in enumerate(views) if not v.get("human")]
+            if not human or not auto:
+                return False
+            victim = max(
+                auto,
+                key=lambda i: max(float(rows[i] @ rows[j]) for j in range(len(rows)) if j != i),
+            )
+            (self.thumbs_dir / f"{views[victim]['view_id']}.jpg").unlink(missing_ok=True)
+            rows[victim] = m.vec
+            views[victim] = {"view_id": view_id, "human": True}
+        else:
+            rows.append(m.vec)
+            views.append({"view_id": view_id, "human": human})
         self._save_view_thumb(view_id, m.thumb_jpeg)
         self.store.upsert_object(
             object_id,
@@ -539,7 +569,7 @@ class Core:
         payload, rows = got
         self.store.upsert_object(
             new_id(),
-            "",
+            payload.get("label", ""),  # keep the name — "door", not "(unnamed)"
             rows,
             list(payload.get("views") or []),
             kind="ignored",
@@ -684,6 +714,7 @@ class Core:
                     "epoch": ts.epoch,
                     "thumb": base64.b64encode(ts.last_thumb).decode() if ts.last_thumb else "",
                     "t": ts.last_seen,
+                    "guesses": ts.guesses,
                 }
             )
 

@@ -351,3 +351,19 @@ body.searching #memories-panel .panel-title::after { content: "· click to clear
   font-family: var(--mono);
 }
 .hint-chip:hover { background: rgba(138, 164, 255, .12); }
+.hint-chip.mem { border-color: var(--amber); color: var(--amber); }
+.hint-chip.mem:hover { background: rgba(255, 190, 102, .12); }
+.unk-thumb.zoomable { cursor: zoom-in; }
+
+/* lightbox: full-size look at a remembered view */
+#lightbox {
+  position: fixed; inset: 0; z-index: 100; cursor: zoom-out;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(5, 5, 11, .88); backdrop-filter: blur(4px);
+}
+#lightbox.hidden { display: none; }
+#lightbox img {
+  max-width: 70vmin; max-height: 70vmin; border-radius: 10px;
+  border: 1px solid var(--border); image-rendering: auto;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .6);
+}

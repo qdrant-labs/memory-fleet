@@ -16,6 +16,11 @@ S_SAME = 0.80
 S_SUGGEST = 0.55
 S_IGNORE = 0.90
 HUMAN_BONUS = 0.02  # a human-vouched view is worth a nudge at the margin
+# Soft suppression: a look this close to an ignored entry is hidden too —
+# UNLESS memory has a better idea (a taught object outranking it wins).
+# Keeps ignored doors/hair from re-flooding the unknowns queue while staying
+# visible as a faint box, one click from rescue (§2 asymmetric suppression).
+S_IGNORE_SOFT = 0.65
 
 
 @dataclass(slots=True)
@@ -52,11 +57,13 @@ def decide(
     session_negs = session_negs or {}
 
     best: tuple[float, Candidate] | None = None
+    best_ignored: Candidate | None = None
     for cand in candidates:
         if cand.kind == "ignored":
-            # blocklist: strict threshold — a false suppression is the costly error
             if cand.score >= thresholds.s_ignore:
-                return Decision("ignored", cand, cand.score)
+                return Decision("ignored", cand, cand.score)  # hard match
+            if best_ignored is None or cand.score > best_ignored.score:
+                best_ignored = cand
             continue
         if cand.id in vetoed_ids or _neg_veto(vec, cand, session_negs):
             continue
@@ -66,11 +73,16 @@ def decide(
         if best is None or adjusted > best[0]:
             best = (adjusted, cand)
 
+    soft_ignore = best_ignored is not None and best_ignored.score >= S_IGNORE_SOFT
     if best is None:
+        if soft_ignore:
+            return Decision("ignored", best_ignored, best_ignored.score)
         return Decision("unknown")
     adjusted, cand = best
     if adjusted >= thresholds.s_same:
-        return Decision("recognized", cand, adjusted)
+        return Decision("recognized", cand, adjusted)  # a taught object outranks a look-alike
+    if soft_ignore and best_ignored.score > adjusted:
+        return Decision("ignored", best_ignored, best_ignored.score)
     if adjusted >= thresholds.s_suggest:
         return Decision("suggest", cand, adjusted)
     return Decision("unknown", cand, adjusted)

@@ -163,10 +163,12 @@ def create_app(settings: Settings, drive_mode: bool = False) -> FastAPI:
 def _hello(app) -> dict:
     core, settings = app.state.core, app.state.settings
     t = core.thresholds
+    sync = app.state.sync
     return {
         "type": "hello",
         "device": settings.device_name,
         "fleet": settings.fleet_enabled,
+        "fleet_online": bool(sync and sync.online),  # current state, not just transitions
         "memories": app.state.mem_count,
         "thresholds": {"s_same": t.s_same, "s_suggest": t.s_suggest, "s_ignore": t.s_ignore},
         "detector_conf": app.state.pipeline.detector.conf,

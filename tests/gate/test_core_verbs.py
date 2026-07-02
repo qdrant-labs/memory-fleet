@@ -131,11 +131,17 @@ def test_ignored_track_becomes_blocklist_entry(h):
     assert len(h.store.scroll_objects(kind="ignored", mutable_only=True)) == 1
 
 
-def test_moderately_similar_item_not_falsely_suppressed(h):
+def test_ignored_lookalikes_softly_suppressed_but_distant_items_are_not(h):
+    """Semantics changed 2026-07-01 (Dylan: ignored doors kept re-flooding the
+    unknowns queue): a mid-similarity match to a blocklist entry is suppressed
+    too — but stays VISIBLE as a faint box, one click from rescue. Genuinely
+    different items still surface as unknown."""
     h.ingest(1, h.geo.view("plant"))
     h.send(IgnoreTrack(tid=1, epoch=1))
-    h.ingest(2, h.geo.view("plant", 0.85))  # below S_ignore=0.9: must NOT suppress
-    assert h.track_state(2).state == "unknown"
+    h.ingest(2, h.geo.view("plant", 0.85))  # look-alike: soft-suppressed
+    assert h.track_state(2).state == "ignored"
+    h.ingest(3, h.geo.view("plant", 0.4))  # too different: must NOT suppress
+    assert h.track_state(3).state == "unknown"
 
 
 # ---------- forget / merge / rename / prune ----------

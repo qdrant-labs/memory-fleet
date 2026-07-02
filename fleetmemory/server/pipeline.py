@@ -23,7 +23,7 @@ from fleetmemory.perception.embedder import Embedder
 logger = logging.getLogger(__name__)
 
 BROADCAST_WIDTH = 960
-THUMB_SIZE = 128
+THUMB_SIZE = 224  # big enough for the lightbox; only ONE rides in a fleet payload
 DRIVE_FPS = 5.0  # drive mode: synthetic clock, deterministic against fed frames
 
 

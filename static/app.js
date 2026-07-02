@@ -47,7 +47,7 @@ const handlers = {
   hello(m) {
     $("device-name").textContent = (m.device || "unit").toUpperCase();
     S.fleetConfigured = m.fleet;
-    setFleet(false); // pill lights up on the first successful sync (fleet_status)
+    setFleet(!!m.fleet_online); // current sync state; fleet_status keeps it live
     setCamera(m.camera !== false);
     S.memories = m.memories;
     bumpCounts();
@@ -545,11 +545,8 @@ function showPop(b, cx, cy) {
       <input type="text" id="teach-name" placeholder="or teach a new name…">
       <div class="pop-row"><button class="pop-btn" data-act="teach">teach</button></div>`;
   } else {
-    const hints = (b.hints || [])
-      .map((hd) => `<button class="hint-chip" data-hint="${esc(hd)}">${esc(hd)}</button>`)
-      .join("");
     html = `<h4>unknown — teach me</h4>
-      ${hints ? `<div class="hint-row">${hints}</div>` : ""}
+      ${guessChips(t.guesses, b.hints)}
       <input type="text" id="teach-name" placeholder="what is this?">
       <div class="pop-row">
         <button class="pop-btn" data-act="teach">teach</button>
@@ -571,6 +568,17 @@ function showPop(b, cx, cy) {
     }
     if (d.act) act(d.act, t);
   };
+}
+
+function guessChips(guesses, hints) {
+  // amber chips: nearest memories (with similarity); blue chips: the detector's guesses
+  const mem = (guesses || [])
+    .map((g) => `<button class="hint-chip mem" data-hint="${esc(g.label)}">${esc(g.label)} · ${g.score.toFixed(2)}</button>`);
+  const det = (hints || [])
+    .filter((hd) => !(guesses || []).some((g) => g.label.toLowerCase() === hd.toLowerCase()))
+    .map((hd) => `<button class="hint-chip" data-hint="${esc(hd)}">${esc(hd)}</button>`);
+  const all = [...mem, ...det];
+  return all.length ? `<div class="hint-row">${all.join("")}</div>` : "";
 }
 
 function act(a, t) {
@@ -649,8 +657,9 @@ function renderUnknowns(force) {
     html += `<div class="section-head">recently seen — left the frame, still teachable</div>`;
     html += [...S.archived.values()].reverse().map((a) => `
       <div class="unknown-item archived" data-key="${a.tid}:${a.epoch}" style="cursor:default">
-        <img class="unk-thumb" src="${a.thumb ? "data:image/jpeg;base64," + a.thumb : ""}" alt="">
+        <img class="unk-thumb zoomable" src="${a.thumb ? "data:image/jpeg;base64," + a.thumb : ""}" alt="" title="click to enlarge">
         <div class="inv-main">
+          ${guessChips(a.guesses, [])}
           <div class="teach-inline">
             <input type="text" placeholder="what was this?" data-tid="${a.tid}" data-epoch="${a.epoch}">
             <button class="mini-btn" data-act="teach">teach</button>
@@ -688,6 +697,11 @@ function renderUnknowns(force) {
     el.querySelector('[data-act="teach"]').onclick = doTeach;
     el.querySelector('[data-act="dismiss"]').onclick = () =>
       send({ cmd: "dismiss_unknown", tid: +input.dataset.tid, epoch: +input.dataset.epoch });
+    el.querySelectorAll(".hint-chip").forEach((chip) => {
+      chip.onclick = () => { input.value = chip.dataset.hint; doTeach(); };
+    });
+    const img = el.querySelector(".zoomable");
+    img.onclick = () => { if (img.src) openLightbox(img.src); };
   });
 }
 
@@ -878,6 +892,14 @@ addEventListener("keydown", (e) => {
     send({ cmd: "scale", on: !S.scaleOn });
   }
 });
+
+// ---------- lightbox ----------
+function openLightbox(src) {
+  const lb = $("lightbox");
+  lb.querySelector("img").src = src;
+  lb.classList.remove("hidden");
+}
+$("lightbox").onclick = () => $("lightbox").classList.add("hidden");
 
 // ---------- misc ----------
 function toast(msg) {
