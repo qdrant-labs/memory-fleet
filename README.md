@@ -102,7 +102,8 @@ Porting beyond a laptop (ballpark, not measured on this app):
 - **Recommended:** 16 GB RAM, RTX 3060 or Jetson Orin NX class.
 
 Detection is the only heavy workload; on Nvidia hardware it needs a one-line
-device change in `perception/detector.py`.
+device change in `perception/detector.py`. A Jetson Orin Nano 8 GB can hold
+the full detection rate if the detector is exported to TensorRT.
 
 ## Applications
 
