@@ -116,10 +116,11 @@ body {
   background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.012) 3px 4px);
 }
 #pipeline-ticker {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  display: flex; align-items: center; gap: 8px; padding: 7px 14px;
-  background: linear-gradient(180deg, transparent, rgba(5, 5, 11, .85) 40%);
-  font-size: 13px; color: var(--dim); letter-spacing: 1px;
+  position: absolute; left: 12px; right: 12px; bottom: 12px;
+  display: flex; align-items: center; gap: 12px; padding: 10px 18px;
+  background: rgba(5, 5, 11, .62); backdrop-filter: blur(8px);
+  border: 1px solid rgba(38, 41, 69, .8); border-radius: 999px;
+  font-size: 15.5px; color: var(--dim); letter-spacing: 1px;
 }
 .tick-label { color: var(--red); font-weight: 700; letter-spacing: 2px; }
 .tick-step b { color: var(--text); }
@@ -353,6 +354,24 @@ body.searching #memories-panel .panel-title::after { content: "· click to clear
 .hint-chip:hover { background: rgba(138, 164, 255, .12); }
 .hint-chip.mem { border-color: var(--amber); color: var(--amber); }
 .hint-chip.mem:hover { background: rgba(255, 190, 102, .12); }
+
+/* picture pills: nearest remembered objects (image + name + similarity) */
+.guess-grid { display: flex; flex-direction: column; gap: 7px; margin-bottom: 4px; }
+.guess-pill {
+  display: flex; align-items: center; gap: 10px; text-align: left;
+  background: var(--panel2); border: 1px solid var(--amber); border-radius: 10px;
+  padding: 6px 12px 6px 6px; cursor: pointer; font-family: var(--mono);
+  color: var(--text); font-size: 14px; width: 100%;
+}
+.guess-pill:hover { background: rgba(255, 190, 102, .14); }
+.guess-pill img {
+  width: 44px; height: 44px; border-radius: 7px; object-fit: cover;
+  background: #05050b; flex-shrink: 0;
+}
+.guess-pill span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.guess-pill i { font-style: normal; color: var(--amber); margin-left: 8px; font-size: 12px; }
+.guess-pill.sm { width: auto; padding: 4px 10px 4px 4px; font-size: 12.5px; }
+.guess-pill.sm img { width: 32px; height: 32px; }
 .unk-thumb.zoomable { cursor: zoom-in; }
 
 /* lightbox: full-size look at a remembered view */

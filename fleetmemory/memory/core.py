@@ -341,16 +341,22 @@ class Core:
         res = self.store.recognize(m.vec)
         self._emit({"type": "query", "tid": m.tid, "ms": res.latency_ms, "searched": res.searched})
         d = decide(m.vec, res.candidates, self.thresholds, ts.vetoed, self.session_negs)
-        # nearest memories, teachable one-click from the popover/drawer
-        seen: set[str] = set()
+        # nearest memories as picture pills: at suggest tier you pick WHICH
+        # instance it is; at unknown tier they're one-click teach options
         ts.guesses = []
         for c in res.candidates:
             if c.kind != "object" or c.payload.get("synthetic") or not c.label:
                 continue
-            if c.label.lower() in seen or c.score < 0.3:
+            if c.score < 0.3:
                 continue
-            seen.add(c.label.lower())
-            ts.guesses.append({"label": c.label, "score": round(c.score, 2)})
+            ts.guesses.append(
+                {
+                    "object_id": c.id,
+                    "label": c.label,
+                    "score": round(c.score, 2),
+                    "thumb": c.payload.get("thumb", ""),
+                }
+            )
             if len(ts.guesses) == 3:
                 break
         self._apply_decision(m.tid, ts, d, m)
@@ -374,8 +380,8 @@ class Core:
                 self.store.set_payload(obj, {"sightings": count + 1, "t_seen": m.t})
         if state == "recognized" and d.candidate.from_mutable:
             self._maybe_accrete(d.candidate.id, m, human=False)
-        if changed or state == "recognized":
-            self._track_event(tid, ts)
+        if changed or state in ("recognized", "suggest"):
+            self._track_event(tid, ts)  # suggest re-emits so its pills stay fresh
 
     def _track_event(self, tid: int, ts: TrackState):
         self._emit(
@@ -387,7 +393,7 @@ class Core:
                 "object_id": ts.object_id,
                 "label": ts.label,
                 "score": round(ts.score, 3),
-                "guesses": ts.guesses if ts.state == "unknown" else [],
+                "guesses": ts.guesses if ts.state in ("unknown", "suggest") else [],
             }
         )
 

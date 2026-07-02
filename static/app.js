@@ -533,10 +533,17 @@ function showPop(b, cx, cy) {
         <button class="pop-btn ghost" data-act="ignore">ignore</button>
       </div>`;
   } else if (t.state === "suggest") {
-    html = `<h4>looks like «${esc(t.label)}» — same?</h4>
+    // picture pills: pick WHICH remembered object this is
+    const pills = (t.guesses || []).map((g) => `
+      <button class="guess-pill" data-oid="${g.object_id}">
+        <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
+        <span>${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
+      </button>`).join("");
+    html = `<h4>is it one of these?</h4>
+      <div class="guess-grid">${pills}</div>
       <div class="pop-row">
-        <button class="pop-btn ok" data-act="confirm">yes</button>
-        <button class="pop-btn ghost" data-act="reject">no</button>
+        <button class="pop-btn ghost" data-act="reject">none of these</button>
+        <button class="pop-btn ghost" data-act="ignore">ignore</button>
       </div>
       <input type="text" id="teach-name" placeholder="or teach a new name…">
       <div class="pop-row"><button class="pop-btn" data-act="teach">teach</button></div>`;
@@ -556,8 +563,15 @@ function showPop(b, cx, cy) {
   const inp = $("teach-name");
   if (inp) { inp.focus(); inp.onkeydown = (ev) => { if (ev.key === "Enter") act("teach", t); }; }
   pop.onclick = (ev) => {
-    const d = ev.target.dataset || {};
-    if (d.hint) {  // one-click teach with the detector's guess
+    const el = ev.target.closest("[data-oid],[data-hint],[data-act]");
+    if (!el) return;
+    const d = el.dataset;
+    if (d.oid) {  // picture pill: confirm THIS instance
+      send({ cmd: "confirm", tid: S.pop.tid, epoch: S.pop.epoch, object_id: d.oid });
+      hidePop();
+      return;
+    }
+    if (d.hint) {  // one-click teach with a suggested name
       const inp = $("teach-name");
       if (inp) { inp.value = d.hint; act("teach", t); }
       return;
@@ -567,9 +581,12 @@ function showPop(b, cx, cy) {
 }
 
 function guessChips(guesses, hints) {
-  // amber chips: nearest memories (with similarity); blue chips: the detector's guesses
-  const mem = (guesses || [])
-    .map((g) => `<button class="hint-chip mem" data-hint="${esc(g.label)}">${esc(g.label)} · ${g.score.toFixed(2)}</button>`);
+  // picture pills: nearest memories (teach that name); blue chips: detector guesses
+  const mem = (guesses || []).map((g) => `
+    <button class="guess-pill sm" data-hint="${esc(g.label)}">
+      <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
+      <span>${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
+    </button>`);
   const det = (hints || [])
     .filter((hd) => !(guesses || []).some((g) => g.label.toLowerCase() === hd.toLowerCase()))
     .map((hd) => `<button class="hint-chip" data-hint="${esc(hd)}">${esc(hd)}</button>`);
@@ -693,7 +710,7 @@ function renderUnknowns(force) {
     el.querySelector('[data-act="teach"]').onclick = doTeach;
     el.querySelector('[data-act="dismiss"]').onclick = () =>
       send({ cmd: "dismiss_unknown", tid: +input.dataset.tid, epoch: +input.dataset.epoch });
-    el.querySelectorAll(".hint-chip").forEach((chip) => {
+    el.querySelectorAll(".hint-chip, .guess-pill").forEach((chip) => {
       chip.onclick = () => { input.value = chip.dataset.hint; doTeach(); };
     });
     const img = el.querySelector(".zoomable");

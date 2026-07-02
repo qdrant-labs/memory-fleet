@@ -42,6 +42,25 @@ def test_unknown_carries_memory_guesses(h):
     assert "watch" in [g["label"] for g in ev["guesses"]]
 
 
+def test_suggest_carries_picture_pills_and_pill_confirm_binds(h):
+    """At suggest tier the UI offers the nearest instances as picture pills;
+    clicking one confirms into THAT instance."""
+    a = h.track_state  # noqa: F841 (readability)
+    h.ingest(1, h.geo.view("watch-a"))
+    h.send(Teach(tid=1, epoch=1, label="watch"))
+    h.ingest(2, h.geo.view("watch-b"))
+    h.send(Teach(tid=2, epoch=1, label="watch"))  # a second, different watch
+    h.ingest(3, h.geo.view("watch-b", 0.65))  # suggest tier
+    ev = h.last("track_update")
+    assert ev["state"] == "suggest"
+    assert ev["guesses"] and {"object_id", "label", "score", "thumb"} <= set(ev["guesses"][0])
+    picked = ev["guesses"][0]["object_id"]  # nearest = the watch-b instance
+    assert picked == h.track_state(2).object_id
+    h.send(Confirm(tid=3, epoch=1, object_id=picked))
+    assert h.track_state(3).object_id == picked
+    assert h.track_state(3).state == "recognized"
+
+
 def test_full_object_still_learns_from_confirms(h):
     """A watch at VIEW_CAP views must keep improving: a confirmed human view
     replaces the most redundant auto view instead of being dropped."""
