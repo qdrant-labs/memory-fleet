@@ -271,6 +271,12 @@ aside.hidden { transform: translateX(105%); }
 .setting label { display: flex; justify-content: space-between; color: var(--dim); font-size: 12.5px; letter-spacing: 1.5px; margin-bottom: 7px; }
 .setting b { color: var(--text); }
 .setting input[type=range] { width: 100%; accent-color: var(--red); }
+.slider-ends {
+  display: flex; justify-content: space-between; margin-top: 1px;
+  font-size: 11px; color: var(--faint); letter-spacing: .3px;
+}
+.slider-ends span:first-child::before { content: "◁ "; }
+.slider-ends span:last-child::after { content: " ▷"; }
 .tune-hint { color: var(--faint); font-size: 12.5px; line-height: 1.45; margin-top: 6px; }
 .tune-hint.center { text-align: center; }
 #tier-band { display: flex; margin-top: 16px; border-radius: 5px; overflow: hidden; height: 22px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }

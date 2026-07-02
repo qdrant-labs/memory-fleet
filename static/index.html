@@ -105,43 +105,46 @@
 <aside id="tuning" class="hidden">
   <div class="drawer-head"><span>TUNING</span><button id="tuning-close">×</button></div>
   <div class="tuning-body">
-    <p class="tune-intro">Every box is decided by one vector search against memory.
-    These sliders move the decision lines.</p>
+    <p class="tune-intro">Five dials. The first two decide what the camera
+    points at; the last three decide how sure it must be before it speaks.</p>
 
     <div class="setting">
       <label>DETECTOR SENSITIVITY <b id="v-conf"></b></label>
       <input type="range" id="s-conf" min="0.1" max="0.7" step="0.01">
-      <p class="tune-hint">How easily the camera proposes a region at all.
-      Lower&nbsp;= more boxes (and more noise); higher&nbsp;= only confident shapes.</p>
+      <div class="slider-ends"><span>more boxes, more noise</span><span>fewer, surer boxes</span></div>
+      <p class="tune-hint">How eager the camera is to point at things at all.</p>
     </div>
 
     <div class="setting">
       <label>MAX OBJECT SIZE <b id="v-area"></b></label>
       <input type="range" id="s-area" min="0.05" max="0.60" step="0.01">
-      <p class="tune-hint">Biggest region worth tracking, as a share of the frame.
-      Anything larger is treated as scenery and skipped. Raise it to teach
-      big items held close to the camera; lower it if empty phantom boxes appear.</p>
+      <div class="slider-ends"><span>small items only</span><span>big items too</span></div>
+      <p class="tune-hint">Anything bigger than this share of the screen is
+      treated as scenery and skipped.</p>
     </div>
 
     <div class="setting">
       <label>RECOGNIZE ABOVE <b id="v-same"></b></label>
       <input type="range" id="s-same" min="0.5" max="0.99" step="0.01">
-      <p class="tune-hint">Similarity needed to name an object on its own.
-      Lower&nbsp;= bolder (risks wrong names); higher&nbsp;= stricter (asks more often).</p>
+      <div class="slider-ends"><span>names things boldly</span><span>only when certain</span></div>
+      <p class="tune-hint">How sure it must be to name something on its own.
+      Too low and it guesses wrong; too high and it keeps asking you.</p>
     </div>
 
     <div class="setting">
       <label>SUGGEST ABOVE <b id="v-suggest"></b></label>
       <input type="range" id="s-suggest" min="0.3" max="0.9" step="0.01">
-      <p class="tune-hint">Below "recognize" but above this, it asks:
-      “looks like&nbsp;X — same?” Below this it stays unknown.</p>
+      <div class="slider-ends"><span>asks about vague looks</span><span>asks only close calls</span></div>
+      <p class="tune-hint">When it's not sure enough to name, it asks
+      “same as&nbsp;X?” — this sets how vague a look can still trigger the question.</p>
     </div>
 
     <div class="setting">
       <label>SUPPRESS ABOVE <b id="v-ignore"></b></label>
       <input type="range" id="s-ignore" min="0.6" max="0.99" step="0.01">
-      <p class="tune-hint">How closely something must match a blocklisted look
-      before it's hidden. Kept strict so real objects are never silently eaten.</p>
+      <div class="slider-ends"><span>hides look-alikes</span><span>hides exact matches only</span></div>
+      <p class="tune-hint">How closely something must match an ignored look
+      before it's hidden. Kept strict so a real object never disappears by accident.</p>
     </div>
 
     <div id="tier-band">
@@ -149,7 +152,7 @@
       <div class="band suggest">ask</div>
       <div class="band same">recognize</div>
     </div>
-    <p class="tune-hint center">the similarity scale, 0 → 1</p>
+    <p class="tune-hint center">how a match's similarity is decided, 0 → 1</p>
   </div>
 </aside>
 
