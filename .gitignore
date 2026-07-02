@@ -1,0 +1,18 @@
+# secrets
+.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# model weights (ultralytics downloads to repo root)
+*.pt
+*.onnx
+
+# runtime data (demo-golden/ stays versioned — it is the staged cold-open state)
+edge-data*/
+*.snapshot
+
+# os
+.DS_Store
