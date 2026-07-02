@@ -260,7 +260,9 @@ def _to_message(m: dict, cmd: str):
                 tid=int(m["tid"]), epoch=int(m["epoch"]), object_id=str(m["object_id"])
             )
         case "ignore_track":
-            return verbs.IgnoreTrack(tid=int(m["tid"]), epoch=int(m["epoch"]))
+            return verbs.IgnoreTrack(
+                tid=int(m["tid"]), epoch=int(m["epoch"]), label=str(m.get("label", ""))
+            )
         case "dismiss_unknown":
             return verbs.DismissUnknown(tid=int(m["tid"]), epoch=int(m["epoch"]))
         case "ignore_object":

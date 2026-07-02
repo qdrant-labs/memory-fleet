@@ -1,6 +1,6 @@
 # Fleet Memory — build/run targets
 
-.PHONY: setup lint run run-b reset demo-check demo-restore demo-save demo-scale
+.PHONY: setup lint run run-b reset demo-check demo-restore demo-save demo-scale fleet-sleep
 
 setup:
 	uv sync --all-extras
@@ -17,6 +17,11 @@ run-b:
 
 reset:
 	rm -rf edge-data
+
+# consolidate duplicate instances + decay stale memories on the fleet
+# (run while units are quiet; --dry-run to preview)
+fleet-sleep:
+	uv run python -m fleetmemory.sync.sleep
 
 # --- demo rituals ---
 

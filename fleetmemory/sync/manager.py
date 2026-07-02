@@ -1,4 +1,6 @@
-"""Sync lifecycle: pull every ~30 s (or on demand), push only from curation.
+"""Sync lifecycle: every ~30 s tick pulls, then auto-pushes any dirty
+confirmed objects in one batch (curation can still push explicitly). Offline
+ticks skip both — dirty objects wait and ride the first tick after reconnect.
 Downloads happen on this worker; shard mutations happen as queued core
 messages. Sync failures degrade to "fleet offline", never crash.
 """
@@ -16,6 +18,7 @@ import numpy as np
 from fleetmemory.memory.core import (
     ApplyPartialSnapshot,
     Core,
+    DrainSightings,
     ManifestRequest,
     MarkPushed,
     PreparePush,
@@ -76,6 +79,7 @@ class SyncManager:
             self.client.ensure_collection()
             self._ensured = True
             self.pull_once()  # seed / catch-up on boot
+            self.push(None)  # teachings from an offline session go up right away
             self._set_online(True)
         except Exception as e:
             logger.info("sync: fleet unreachable at boot (%s) — running local-first", e)
@@ -95,6 +99,8 @@ class SyncManager:
                     self._ensured = True
                 if job[0] == "pull":
                     self.pull_once()
+                    self.push(None)  # dirty confirmed objects ride the pull tick
+                    self.touch_sightings()  # decay must spare what units still see
                     next_pull = time.time() + self.interval
                 elif job[0] == "push":
                     self.push(job[1])
@@ -128,14 +134,27 @@ class SyncManager:
             raise
         self.core.submit(ApplyPartialSnapshot(path=str(dest), cleanup=True))
 
+    def touch_sightings(self):
+        """Stamp t_seen on fleet points recognized since the last tick.
+        Recognition never dirties a point, so without this heartbeat the decay
+        job would fade memories the fleet still sees every day."""
+        reply: queue.Queue = queue.Queue()
+        self.core.submit(DrainSightings(reply=reply))
+        seen = reply.get(timeout=REPLY_TIMEOUT)
+        if seen:
+            self.client.touch_seen(seen, time.time())
+
     # ---------- push: prepare (core) -> fleet ops (here) -> mark (core) ----------
 
-    def push(self, object_ids: list):
+    def push(self, object_ids: list | None):
+        """object_ids=None is the auto-push sweep: all dirty confirmed objects,
+        silent when there is nothing to send (no 'nothing to push' toast)."""
         reply: queue.Queue = queue.Queue()
         self.core.submit(PreparePush(object_ids=object_ids, reply=reply))
         objs = reply.get(timeout=REPLY_TIMEOUT)
-        if not objs:  # everything filtered (blocklist/synthetic/missing): still ack
-            self.core.submit(MarkPushed(items=[]))
+        if not objs:  # everything filtered (blocklist/synthetic/missing)
+            if object_ids is not None:  # a user-initiated push still gets an ack
+                self.core.submit(MarkPushed(items=[]))
             return
         items = []
         now = time.time()
@@ -167,6 +186,7 @@ class SyncManager:
                     **(existing.payload or {}),
                     "views": views,
                     "t_sync": now,
+                    "t_seen": now,  # decay freshness: pushing IS an interaction
                     # label AND label_key: a renamed local copy carries the new
                     # display name into the fold, not just the lookup key
                     "label": o["label"],
@@ -195,6 +215,7 @@ class SyncManager:
                     "event": o["event"],
                     "t_created": o["t_created"],
                     "t_sync": now,
+                    "t_seen": now,  # decay freshness: pushing IS an interaction
                     "views": o["views"],
                     "neg": o["neg"],
                     "thumb": o["thumb"],

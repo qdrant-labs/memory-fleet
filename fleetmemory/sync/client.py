@@ -88,6 +88,9 @@ class FleetClient:
         self.client.create_payload_index(
             self.collection, "label_key", models.PayloadSchemaType.KEYWORD
         )
+        # the decay formula (fleet sleep) reads t_seen server-side — formula
+        # variables need an index of a numeric type
+        self.client.create_payload_index(self.collection, "t_seen", models.PayloadSchemaType.FLOAT)
 
     # ---------- pull (native snapshots) ----------
 
@@ -134,6 +137,12 @@ class FleetClient:
             with_vectors=True,
         )
         return recs
+
+    def touch_seen(self, ids: list, t: float):
+        """Freshness heartbeat: recognized objects get t_seen stamped so the
+        decay job spares them. Ids not on the fleet (still-dirty locals) are
+        silently skipped by Qdrant."""
+        self.client.set_payload(self.collection, payload={"t_seen": t}, points=ids)
 
     def upsert_object(self, point_id: str, label: str, rows: list, payload: dict):
         vector = {"exemplars": [list(map(float, r)) for r in rows]}

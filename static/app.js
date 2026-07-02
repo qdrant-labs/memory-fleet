@@ -19,6 +19,8 @@ const S = {
   pop: null,
   selected: new Set(),
   expanded: null,
+  openCats: new Set(),     // drawer category boxes open (label groups)
+  openMemCats: new Set(),  // latest-memories category boxes open
   fleetOn: false,
   fleetConfigured: false,
   cameraOn: true,
@@ -390,26 +392,70 @@ function relTime(t) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function renderMemories() {
-  const box = $("recent-memories");
-  const objs = S.inventory.filter((o) => !o.ignored && o.created)
-    .sort((a, b) => b.created - a.created).slice(0, 12);
-  if (!objs.length) {
-    box.innerHTML = `<div class="mem-none">nothing remembered yet · teach me something</div>`;
-    return;
-  }
-  box.innerHTML = objs.map((o) => `
-    <div class="mem-row" data-id="${o.object_id}" data-label="${esc(o.label)}">
+function memRow(o, cls = "") {
+  return `
+    <div class="mem-row ${cls}" data-id="${o.object_id}" data-label="${esc(o.label)}">
       <img class="mem-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">
       <div class="mem-main">
         <div class="mem-label">${esc(o.label)}</div>
         <div class="mem-meta">${o.views.length} vector${o.views.length === 1 ? "" : "s"}
           · learned ${relTime(o.created)}${o.sightings ? ` · seen ${o.sightings}×` : ""}${o.local ? "" : ` · ${esc(o.device || "fleet")}`}</div>
       </div>
-    </div>`).join("");
-  box.querySelectorAll(".mem-row").forEach((el) => {
-    el.onclick = () => searchFor(el.dataset.label, el.dataset.id);
+    </div>`;
+}
+
+function renderMemories() {
+  const box = $("recent-memories");
+  const objs = S.inventory.filter((o) => !o.ignored && o.created)
+    .sort((a, b) => b.created - a.created);
+  if (!objs.length) {
+    box.innerHTML = `<div class="mem-none">nothing remembered yet · teach me something</div>`;
+    return;
+  }
+  // category boxes: five hats are ONE "hat" row until opened
+  const cats = new Map();
+  for (const o of objs) {
+    const k = (o.label || "").trim().toLowerCase();
+    cats.has(k) ? cats.get(k).push(o) : cats.set(k, [o]);
+  }
+  box.innerHTML = [...cats.entries()].slice(0, 12).map(([k, g]) => {
+    if (g.length === 1) return memRow(g[0]);
+    const open = S.openMemCats.has(k);
+    const vecs = g.reduce((n, o) => n + o.views.length, 0);
+    return `
+      <div class="mem-row cat" data-cat="${esc(k)}">
+        <img class="mem-thumb" src="${g[0].thumb ? "data:image/jpeg;base64," + g[0].thumb : ""}" alt="">
+        <div class="mem-main">
+          <div class="mem-label">${esc(g[0].label)} <span class="cat-count">×${g.length}</span></div>
+          <div class="mem-meta">${g.length} instances · ${vecs} vectors · newest ${relTime(g[0].created)}</div>
+        </div>
+        <span class="cat-caret">${open ? "▾" : "▸"}</span>
+      </div>
+      ${open ? g.map((o) => memRow(o, "in-cat")).join("") : ""}`;
+  }).join("");
+  box.querySelectorAll(".mem-row.cat").forEach((el) => {
+    el.onclick = () => {
+      const k = el.dataset.cat;
+      S.openMemCats.has(k) ? S.openMemCats.delete(k) : S.openMemCats.add(k);
+      renderMemories();
+    };
   });
+  box.querySelectorAll(".mem-row[data-id]").forEach((el) => {
+    // inside a category the instance opens its views; a lone memory keeps
+    // the search + map-pulse beat
+    el.onclick = () => el.classList.contains("in-cat")
+      ? openViews(el.dataset.id)
+      : searchFor(el.dataset.label, el.dataset.id);
+  });
+}
+
+function openViews(oid) {
+  const o = S.inventory.find((x) => x.object_id === oid);
+  S.expanded = oid;
+  if (o) S.openCats.add(catKey(o));  // keep its category open behind it
+  openDrawer("inventory");
+  send({ cmd: "inventory" });
+  renderInventory();
 }
 
 function searchFor(label, oid) {
@@ -697,7 +743,7 @@ function showPop(b, cx, cy) {
     // picture pills: pick WHICH remembered object this is (red = an ignored look)
     const pills = (t.guesses || []).map((g) => `
       <button class="guess-pill ${g.ignored ? "ign" : ""}"
-              ${g.ignored ? 'data-ign="1"' : `data-oid="${g.object_id}"`}>
+              ${g.ignored ? `data-ign="1" data-iglabel="${esc(g.label)}"` : `data-oid="${g.object_id}"`}>
         <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
         <span>${g.ignored ? "⊘ " : ""}${esc(g.label || "ignored look")}<i>${g.score.toFixed(2)}</i></span>
       </button>`).join("");
@@ -726,15 +772,11 @@ function showPop(b, cx, cy) {
   const inp = $("teach-name");
   if (inp) { inp.focus(); inp.onkeydown = (ev) => { if (ev.key === "Enter") act("teach", t); }; }
   pop.onclick = (ev) => {
-    const el = ev.target.closest("[data-oid],[data-hint],[data-act],[data-ign],[data-teachfocus]");
+    const el = ev.target.closest("[data-oid],[data-hint],[data-act],[data-ign]");
     if (!el) return;
     const d = el.dataset;
-    if (d.teachfocus) {  // blocklisted look with no name — user types one, server rescues by similarity
-      $("teach-name")?.focus();
-      return;
-    }
-    if (d.ign) {  // "it's that ignored thing" — fold this view into the blocklist
-      send({ cmd: "ignore_track", tid: S.pop.tid, epoch: S.pop.epoch });
+    if (d.ign) {  // "it's that ignored thing" — the view joins the blocklist
+      send({ cmd: "ignore_track", tid: S.pop.tid, epoch: S.pop.epoch, label: d.iglabel || "" });
       hidePop();
       return;
     }
@@ -754,16 +796,16 @@ function showPop(b, cx, cy) {
 
 function guessChips(guesses, hints) {
   // picture pills: nearest memories (teach that name); red pills: blocklisted
-  // looks (teach binds by similarity → server rescues them); blue chips: detector guesses
+  // looks (click = it's that ignored thing — the view joins the blocklist,
+  // never spawns an object); blue chips: detector guesses
   const gs = guesses || [];
   const mem = gs.filter((g) => !g.ignored).map((g) => `
     <button class="guess-pill sm" data-hint="${esc(g.label)}">
       <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
       <span>${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
     </button>`);
-  // named look → prefill + submit; unnamed → just focus the teach input
   const ign = gs.filter((g) => g.ignored).map((g) => `
-    <button class="guess-pill sm ign" ${g.label ? `data-hint="${esc(g.label)}"` : 'data-teachfocus="1"'}>
+    <button class="guess-pill sm ign" data-ign="1" data-iglabel="${esc(g.label)}">
       <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
       <span>⊘ ${esc(g.label || "ignored look")}<i>${g.score.toFixed(2)}</i></span>
     </button>`);
@@ -903,8 +945,10 @@ function renderUnknowns(force) {
       send({ cmd: "dismiss_unknown", tid: +input.dataset.tid, epoch: +input.dataset.epoch });
     el.querySelectorAll(".hint-chip, .guess-pill").forEach((chip) => {
       chip.onclick = () => {
-        if (chip.dataset.hint) { input.value = chip.dataset.hint; doTeach(); }
-        else input.focus();  // unnamed blocklist look: type a name, server rescues by similarity
+        const d = chip.dataset;
+        if (d.ign)  // "it was that ignored thing" — its view joins the blocklist
+          send({ cmd: "ignore_track", tid: +input.dataset.tid, epoch: +input.dataset.epoch, label: d.iglabel || "" });
+        else if (d.hint) { input.value = d.hint; doTeach(); }
       };
     });
     const img = el.querySelector(".zoomable");
@@ -923,6 +967,35 @@ function renderInventory() {
     || (o.device || "").toLowerCase().includes(q);
   const objects = S.inventory.filter((o) => !o.ignored && match(o));
   const ignored = S.inventory.filter((o) => o.ignored && match(o));
+  // category boxes: same-name instances collapse to one row; a filter query
+  // opens whatever it matched (typing "hat" should show the hats, not a box)
+  const grouped = (list) => {
+    const cats = new Map();
+    for (const o of list) {
+      const k = catKey(o);
+      cats.has(k) ? cats.get(k).push(o) : cats.set(k, [o]);
+    }
+    let out = "";
+    for (const [k, g] of cats) {
+      if (g.length === 1) {
+        out += invRow(g[0]);
+        continue;
+      }
+      const open = !!q || S.openCats.has(k);
+      const vecs = g.reduce((n, o) => n + o.views.length, 0);
+      out += `
+        <div class="inv-item cat" data-cat="${esc(k)}">
+          <img class="inv-thumb" src="${g[0].thumb ? "data:image/jpeg;base64," + g[0].thumb : ""}" alt="">
+          <div class="inv-main">
+            <div class="inv-label">${esc(g[0].label || "ignored look")} <span class="cat-count">×${g.length}</span></div>
+            <div class="inv-meta">${g.length} instances · ${vecs} vector${vecs === 1 ? "" : "s"}</div>
+          </div>
+          <span class="cat-caret">${open ? "▾" : "▸"}</span>
+        </div>`;
+      if (open) out += g.map((o) => invRow(o, "in-cat")).join("");
+    }
+    return out;
+  };
   let html = "";
   if (!objects.length && !ignored.length) {
     html = q
@@ -931,15 +1004,22 @@ function renderInventory() {
   }
   if (objects.length) {
     html += `<div class="section-head">objects — select to push or merge</div>`;
-    html += objects.map((o) => invRow(o)).join("");
+    html += grouped(objects);
   }
   if (ignored.length) {
     html += `<div class="section-head">ignored — never tracked or asked about</div>`;
-    html += ignored.map((o) => invRow(o)).join("");
+    html += grouped(ignored);
   }
   body.innerHTML = html;
 
-  body.querySelectorAll(".inv-item").forEach((el) => {
+  body.querySelectorAll(".inv-item.cat").forEach((el) => {
+    el.onclick = () => {
+      const k = el.dataset.cat;
+      S.openCats.has(k) ? S.openCats.delete(k) : S.openCats.add(k);
+      renderInventory();
+    };
+  });
+  body.querySelectorAll(".inv-item[data-id]").forEach((el) => {
     el.onclick = () => {
       S.expanded = S.expanded === el.dataset.id ? null : el.dataset.id;
       renderInventory();
@@ -976,7 +1056,12 @@ function renderInventory() {
   updateCuration();
 }
 
-function invRow(o) {
+function catKey(o) {
+  // objects and blocklist entries group separately even under the same name
+  return (o.ignored ? "ign:" : "obj:") + (o.label || "").trim().toLowerCase();
+}
+
+function invRow(o, cls = "") {
   const badge = o.ignored
     ? `<span class="badge ignored">ignored</span>`
     : `<span class="badge ${o.local ? "" : "fleet"}">${o.local ? (o.pushed ? "pushed" : "local") : "fleet"}</span>`;
@@ -988,7 +1073,7 @@ function invRow(o) {
          <button class="mini-btn" data-act="forget" title="forget">✕</button>`
       : "";
   return `
-    <div class="inv-item" data-id="${o.object_id}">
+    <div class="inv-item ${cls}" data-id="${o.object_id}">
       ${o.local ? `<input type="checkbox" class="inv-check" data-id="${o.object_id}"
         ${S.selected.has(o.object_id) ? "checked" : ""}>` : ""}
       <img class="inv-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">

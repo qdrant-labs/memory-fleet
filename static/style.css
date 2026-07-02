@@ -2,20 +2,21 @@
    Type system: sans for prose/meta, mono for telemetry, labels, and numbers. */
 
 :root {
-  --bg: #07080f;
-  --panel: #0e101f;
-  --panel2: #161936;
-  --border: #2b2f55;
-  --border-soft: #20244a;
-  --well: #04050a;          /* video + input wells */
-  --text: #eef1fb;
-  --dim: #c3c8e2;
-  --faint: #9aa0c4;
+  --bg: #050812;            /* orbital black */
+  --panel: #0b1020;
+  --panel2: #121a33;
+  --border: #40507f;        /* brighter blue-violet edge, reads on a projector */
+  --border-soft: #26345f;
+  --well: #02040a;          /* video + input wells */
+  --text: #f5f7ff;
+  --dim: #d5dcf4;
+  --faint: #aeb8da;
   --red: #dc244c;           /* Qdrant crimson */
   --red-soft: rgba(220, 36, 76, .16);
   --green: #3af0b4;
   --amber: #ffbe66;
   --blue: #8aa4ff;
+  --violet: #7c8cff;        /* nebula accent, used sparingly */
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Inter, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
 }
@@ -24,7 +25,7 @@
 html, body { height: 100%; }
 body {
   background: var(--bg); color: var(--text);
-  font-family: var(--sans); font-size: 14.5px;
+  font-family: var(--sans); font-size: 16px;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
@@ -37,8 +38,9 @@ body {
   height: 100vh; display: flex; flex-direction: column;
   padding: 12px 16px 14px; gap: 10px;
   background:
-    radial-gradient(1200px 600px at 70% -10%, rgba(138, 164, 255, .07), transparent),
-    radial-gradient(900px 500px at 10% 110%, rgba(220, 36, 76, .06), transparent),
+    radial-gradient(1200px 620px at 72% -12%, rgba(124, 140, 255, .12), transparent 70%),
+    radial-gradient(900px 520px at 8% 112%, rgba(220, 36, 76, .09), transparent 70%),
+    radial-gradient(700px 500px at 100% 60%, rgba(58, 240, 180, .05), transparent 70%),
     var(--bg);
 }
 
@@ -55,8 +57,8 @@ body {
 .unit-dot.off { background: #3a3d55; box-shadow: none; }
 .top-btn {
   background: var(--panel); color: var(--dim); border: 1px solid var(--border);
-  border-radius: 7px; padding: 6px 12px; cursor: pointer;
-  font-family: var(--mono); font-size: 13px; letter-spacing: 1px;
+  border-radius: 7px; padding: 7px 13px; cursor: pointer;
+  font-family: var(--mono); font-size: 14px; letter-spacing: 1px;
   transition: color .12s, border-color .12s;
 }
 .top-btn:hover { color: var(--text); border-color: var(--red); }
@@ -88,24 +90,40 @@ body {
 #grid { flex: 1; display: grid; grid-template-columns: 1fr 400px; gap: 10px; min-height: 0; }
 #rail { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .panel {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(124, 140, 255, .05), transparent 120px),
+    var(--panel);
+  border: 1px solid var(--border); border-radius: 10px;
   display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(180, 195, 255, .08), 0 6px 22px rgba(0, 0, 0, .38);
 }
 .panel-title {
   display: flex; justify-content: space-between; align-items: baseline;
-  font-family: var(--mono); font-size: 12px; letter-spacing: 2.5px;
+  font-family: var(--mono); font-size: 13px; letter-spacing: 2.5px;
   color: var(--dim); font-weight: 700;
   padding: 9px 13px 8px; border-bottom: 1px solid var(--border-soft);
-  background: rgba(255, 255, 255, .015);
+  background: rgba(255, 255, 255, .02);
 }
-.title-side { color: var(--faint); font-size: 11px; letter-spacing: 1px; font-weight: 400; display: flex; gap: 8px; align-items: center; }
+.title-side { color: var(--faint); font-size: 12px; letter-spacing: 1px; font-weight: 400; display: flex; gap: 8px; align-items: center; }
 .title-side .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 3px; }
 .dot.local { background: var(--red); }
 .dot.fleet { background: var(--green); }
 
 /* ---------- live feed ---------- */
 #feed-panel { min-height: 0; }
-#feed-wrap { position: relative; flex: 1; min-height: 0; background: var(--well); }
+#feed-wrap {
+  position: relative; flex: 1; min-height: 0;
+  /* deep-space viewport: the letterboxed camera sits inside this, so the bars
+     read as an intentional orbital frame instead of dead black. The canvas
+     clears to transparent outside the video rect, so these layers show there. */
+  background:
+    radial-gradient(130% 130% at 50% 50%, transparent 58%, rgba(2, 4, 10, .8)),
+    radial-gradient(120% 95% at 50% 0%, rgba(124, 140, 255, .11), transparent 55%),
+    radial-gradient(120% 95% at 50% 100%, rgba(220, 36, 76, .08), transparent 55%),
+    linear-gradient(rgba(124, 140, 255, .05) 1px, transparent 1px) 0 0 / 100% 34px,
+    linear-gradient(90deg, rgba(124, 140, 255, .05) 1px, transparent 1px) 0 0 / 34px 100%,
+    var(--well);
+}
 #view { width: 100%; height: 100%; display: block; cursor: crosshair; }
 .hud-corner {
   position: absolute; width: 26px; height: 26px; border: 2px solid rgba(220, 36, 76, .5);
@@ -116,8 +134,8 @@ body {
 .hud-corner.bl { bottom: 10px; left: 10px; border-right: none; border-top: none; }
 .hud-corner.br { bottom: 10px; right: 10px; border-left: none; border-top: none; }
 #rec {
-  position: absolute; top: 16px; right: 46px; display: flex; align-items: center; gap: 6px;
-  font-family: var(--mono); font-size: 11px; letter-spacing: 2px; color: var(--dim);
+  position: absolute; top: 16px; right: 46px; z-index: 3; display: flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 12px; letter-spacing: 2px; color: var(--dim);
 }
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); animation: blink 1.6s infinite; }
 @keyframes blink { 50% { opacity: .25; } }
@@ -127,11 +145,11 @@ body {
   background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.012) 3px 4px);
 }
 #pipeline-ticker {
-  position: absolute; left: 12px; right: 12px; bottom: 12px;
-  display: flex; align-items: center; gap: 12px; padding: 9px 18px;
-  background: rgba(4, 5, 10, .66); backdrop-filter: blur(8px);
-  border: 1px solid rgba(43, 47, 85, .8); border-radius: 999px;
-  font-family: var(--mono); font-size: 14px; color: var(--dim); letter-spacing: 1px;
+  position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 3;
+  display: flex; align-items: center; gap: 12px; padding: 10px 18px;
+  background: rgba(4, 5, 10, .72); backdrop-filter: blur(8px);
+  border: 1px solid rgba(64, 80, 127, .8); border-radius: 999px;
+  font-family: var(--mono); font-size: 15px; color: var(--dim); letter-spacing: 1px;
 }
 .tick-label { color: var(--red); font-weight: 700; letter-spacing: 2px; }
 .tick-step b { color: var(--text); }
@@ -141,8 +159,12 @@ body {
 /* ---------- latency + metrics ---------- */
 #latency-row { display: flex; align-items: center; gap: 14px; padding: 10px 14px 6px; }
 #latency-big {
-  font-family: var(--mono); font-weight: 700; font-size: 44px; min-width: 130px;
-  color: var(--green); text-shadow: 0 0 18px rgba(58, 240, 180, .35);
+  font-family: var(--mono); font-weight: 700; font-size: 48px; min-width: 140px;
+  color: var(--green); text-shadow: 0 0 24px rgba(58, 240, 180, .45);
+  animation: latency-breathe 3.4s ease-in-out infinite;
+}
+@keyframes latency-breathe {
+  50% { text-shadow: 0 0 30px rgba(58, 240, 180, .65); }
 }
 #spark { flex: 1; height: 52px; min-width: 0; }
 .metrics-row {
@@ -150,14 +172,28 @@ body {
   background: var(--border-soft); border-top: 1px solid var(--border-soft);
 }
 .metric { background: var(--panel); padding: 8px 6px; text-align: center; }
-.metric-value { font-family: var(--mono); font-size: 24px; color: var(--text); transition: color .35s; }
+.metric-value { font-family: var(--mono); font-size: 26px; color: var(--text); transition: color .35s; }
 .metric-value.flash { color: var(--amber); }
-.metric-label { font-size: 10.5px; color: var(--faint); letter-spacing: 1.5px; text-transform: uppercase; margin-top: 2px; }
+.metric-label { font-size: 11.5px; color: var(--faint); letter-spacing: 1.5px; text-transform: uppercase; margin-top: 2px; }
 
 /* ---------- map ---------- */
 #map-panel { flex: 0 0 218px; }
-#map-wrap { position: relative; flex: 1; min-height: 0; }
-#map-canvas { width: 100%; height: 100%; display: block; cursor: pointer; }
+#map-wrap {
+  position: relative; flex: 1; min-height: 0;
+  /* barely-visible cosmic field behind the scatter dots (canvas is transparent):
+     one faint nebula cloud + a sparse starfield from layered radial specks */
+  background:
+    radial-gradient(60% 80% at 78% 22%, rgba(124, 140, 255, .10), transparent 60%),
+    radial-gradient(55% 70% at 20% 85%, rgba(58, 240, 180, .06), transparent 60%),
+    radial-gradient(1px 1px at 15% 32%, rgba(230, 236, 255, .55), transparent),
+    radial-gradient(1px 1px at 68% 18%, rgba(230, 236, 255, .40), transparent),
+    radial-gradient(1px 1px at 42% 62%, rgba(230, 236, 255, .45), transparent),
+    radial-gradient(1px 1px at 84% 74%, rgba(230, 236, 255, .35), transparent),
+    radial-gradient(1px 1px at 28% 88%, rgba(230, 236, 255, .30), transparent),
+    radial-gradient(1.4px 1.4px at 90% 44%, rgba(230, 236, 255, .40), transparent),
+    radial-gradient(1px 1px at 55% 40%, rgba(230, 236, 255, .28), transparent);
+}
+#map-canvas { position: relative; width: 100%; height: 100%; display: block; cursor: pointer; }
 #map-canvas.pannable { cursor: grab; }
 #map-canvas.panning { cursor: grabbing; }
 .map-reset {
@@ -188,9 +224,12 @@ body {
 #search::placeholder { color: var(--faint); }
 #search-results { max-height: 300px; overflow-y: auto; padding: 0 8px 8px; }
 .result-row {
-  display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--border-soft); margin-bottom: 6px;
+  background: linear-gradient(180deg, rgba(124, 140, 255, .04), transparent);
+  transition: border-color .12s, background .12s;
 }
-.result-row:hover { background: var(--panel2); }
+.result-row:hover { background: var(--panel2); border-color: var(--violet); }
 .result-thumb { width: 52px; height: 52px; border-radius: 5px; object-fit: cover; background: var(--well); }
 .result-label { flex: 1; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .result-score { width: 66px; height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
@@ -208,14 +247,16 @@ body {
 #memories-panel { flex: 1; min-height: 90px; }
 #recent-memories { flex: 1; overflow-y: auto; padding: 7px 9px; }
 .mem-row {
-  display: flex; align-items: center; gap: 10px; padding: 5px 6px; border-radius: 7px;
-  cursor: pointer; animation: ev-in .25s ease;
+  display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px;
+  border: 1px solid var(--border-soft); margin-bottom: 7px;
+  background: linear-gradient(180deg, rgba(124, 140, 255, .04), transparent);
+  cursor: pointer; animation: ev-in .25s ease; transition: border-color .12s, background .12s;
 }
-.mem-row:hover { background: var(--panel2); }
+.mem-row:hover { background: var(--panel2); border-color: var(--violet); }
 .mem-thumb { width: 56px; height: 56px; border-radius: 6px; object-fit: cover; background: var(--well); border: 1px solid var(--border-soft); }
 .mem-main { flex: 1; min-width: 0; }
-.mem-label { font-size: 14.5px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mem-meta { font-size: 12.5px; color: var(--faint); }
+.mem-label { font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mem-meta { font-size: 13.5px; color: var(--faint); }
 .mem-none { color: var(--faint); padding: 8px 10px; font-size: 13.5px; }
 @keyframes ev-in { from { opacity: 0; transform: translateY(-4px); } }
 
@@ -430,3 +471,12 @@ body.searching #memories-panel .panel-title::after {
   max-width: 70vmin; max-height: 70vmin; border-radius: 10px;
   border: 1px solid var(--border); box-shadow: 0 24px 80px rgba(0, 0, 0, .6);
 }
+
+/* ---------- category boxes (five hats = one row until opened) ---------- */
+.cat-count {
+  font-family: var(--mono); font-size: 11px; color: var(--violet);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; margin-left: 6px;
+}
+.cat-caret { color: var(--faint); font-size: 12px; flex-shrink: 0; }
+.mem-row.in-cat, .inv-item.in-cat { margin-left: 20px; }
+.mem-row.in-cat .mem-thumb { width: 44px; height: 44px; }

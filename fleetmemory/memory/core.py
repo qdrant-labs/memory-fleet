@@ -106,6 +106,7 @@ class Reject:
 class IgnoreTrack:
     tid: int
     epoch: int
+    label: str = ""  # set when the click came from a labeled blocklist pill
 
 
 @dataclass(slots=True)
@@ -189,9 +190,19 @@ class ManifestRequest:
 @dataclass(slots=True)
 class PreparePush:
     """Sync worker asks for push-ready copies of mutable objects (kind=object,
-    non-synthetic). Reply: list of dicts with rows/views/payload fields."""
+    non-synthetic). object_ids=None means every dirty confirmed object —
+    the auto-push sweep. Reply: list of dicts with rows/views/payload fields."""
 
-    object_ids: list
+    object_ids: list | None
+    reply: object
+
+
+@dataclass(slots=True)
+class DrainSightings:
+    """Sync worker asks which objects were recognized since the last drain, to
+    stamp t_seen on their fleet points — decay must not fade memories the
+    fleet still sees, and recognition alone never dirties a point."""
+
     reply: object
 
 
@@ -242,6 +253,9 @@ class Core:
         # sighting stats: object_id -> (count, last_seen). Persisted on mutable
         # objects at bind time; session-only for fleet-mirror objects.
         self.sightings: dict[str, tuple[int, float]] = {}
+        # objects recognized since the last DrainSightings — the sync worker
+        # stamps t_seen on their fleet points so decay spares them
+        self._fleet_seen: set[str] = set()
         self._on_event = on_event or (lambda e: None)
         self._queue: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
@@ -297,6 +311,9 @@ class Core:
                     key = (tid, msg.epoch)
                     if isinstance(msg, Teach) and key in self.recent_unknowns:
                         self._teach_archived(msg, self.recent_unknowns.pop(key))
+                        return
+                    if isinstance(msg, IgnoreTrack) and key in self.recent_unknowns:
+                        self._ignore_archived(msg, self.recent_unknowns.pop(key))
                         return
                     if isinstance(msg, DismissUnknown) and key in self.recent_unknowns:
                         del self.recent_unknowns[key]
@@ -361,6 +378,7 @@ class Core:
         if state == "recognized" and changed:
             count, _ = self.sightings.get(obj, (0, 0.0))
             self.sightings[obj] = (count + 1, m.t)
+            self._fleet_seen.add(obj)
             if d.candidate.from_mutable:
                 self.store.set_payload(obj, {"sightings": count + 1, "t_seen": m.t})
         if state == "recognized" and d.candidate.from_mutable:
@@ -552,6 +570,7 @@ class Core:
         ts.label = got[0].get("label", "") if got else ts.label
         ts.score = 1.0
         ts.vetoed.discard(m.object_id)
+        self._fleet_seen.add(m.object_id)
         self._track_event(m.tid, ts)
 
     def _on_reject(self, m: Reject):
@@ -587,6 +606,12 @@ class Core:
         ts = self.tracks[m.tid]
         if ts.last_vec is None:
             return
+        self._blocklist_view(m.tid, m.epoch, ts, m.label)
+        ts.state, ts.object_id, ts.label, ts.score = "ignored", None, "", 1.0
+        self._track_event(m.tid, ts)
+        self._emit_stats()
+
+    def _blocklist_view(self, tid: int, epoch: int, ts: TrackState, label: str = ""):
         # fold into the nearest existing blocklist entry when it's plausibly the
         # same thing: hair and other shape-shifters need MANY views before the
         # strict suppress threshold covers them — each ignore strengthens ONE
@@ -594,23 +619,22 @@ class Core:
         res = self.store.recognize(ts.last_vec)
         nearest = next((c for c in res.candidates if c.kind == "ignored"), None)
         if nearest is not None and nearest.from_mutable and nearest.score >= IGNORE_FOLD:
-            fake = Ingest(m.tid, m.epoch, ts.last_vec, ts.last_thumb, ts.last_quality, ts.last_seen)
+            fake = Ingest(tid, epoch, ts.last_vec, ts.last_thumb, ts.last_quality, ts.last_seen)
             self._maybe_accrete(nearest.id, fake, human=True)
         else:
+            # a new look of an ignored thing below IGNORE_FOLD is a new
+            # blocklist INSTANCE — it keeps the label the human pointed at
             view_id = uuid.uuid4().hex[:12]
             self._save_view_thumb(view_id, ts.last_thumb)
             self.store.upsert_object(
                 new_id(),
-                "",
+                label,
                 [ts.last_vec],
                 [{"view_id": view_id, "human": True}],
                 kind="ignored",
                 device=self.device_name,
                 thumb=base64.b64encode(ts.last_thumb).decode() if ts.last_thumb else "",
             )
-        ts.state, ts.object_id, ts.label, ts.score = "ignored", None, "", 1.0
-        self._track_event(m.tid, ts)
-        self._emit_stats()
 
     def _on_ignoreobject(self, m: IgnoreObject):
         got = self.store.get_object(m.object_id)
@@ -793,6 +817,13 @@ class Core:
         self._emit({"type": "unknown_removed", "tid": m.tid, "epoch": m.epoch})
         self._emit_stats()
 
+    def _ignore_archived(self, m: IgnoreTrack, ts: TrackState):
+        """Ignore a departed track from its remembered view — the red pill on an
+        archived card means the same thing it means on a live box."""
+        self._blocklist_view(m.tid, m.epoch, ts, m.label)
+        self._emit({"type": "unknown_removed", "tid": m.tid, "epoch": m.epoch})
+        self._emit_stats()
+
     def _on_setthresholds(self, m: SetThresholds):
         self.thresholds = Thresholds(m.s_same, m.s_suggest, m.s_ignore)
         self._emit(
@@ -913,9 +944,20 @@ class Core:
         finally:
             m.reply.put(manifest)
 
+    def _on_drainsightings(self, m: DrainSightings):
+        seen, self._fleet_seen = self._fleet_seen, set()
+        m.reply.put(list(seen))
+
     def _on_preparepush(self, m: PreparePush):
+        ids = m.object_ids
+        if ids is None:  # auto-push sweep: every confirmed object not yet on the fleet
+            ids = [
+                pid
+                for pid, pl, _ in self.store.scroll_objects(mutable_only=True)
+                if not pl.get("t_sync") and not pl.get("synthetic")
+            ]
         out = []
-        for oid in m.object_ids:
+        for oid in ids:
             got = self.store.get_object(oid)
             if got is None:
                 continue

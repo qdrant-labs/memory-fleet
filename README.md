@@ -26,7 +26,7 @@ the Qdrant vector search engine:
   everything keeps working. Sync resumes on its own when the fleet is reachable.
 - **Native Cloud sync.** Local shards synchronize with a Qdrant Cloud collection
   through [Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/):
-  snapshot-based pulls, curated pushes.
+  snapshot-based pulls, automatic batched pushes.
 
 ## Architecture and Stack
 
@@ -39,7 +39,8 @@ the Qdrant vector search engine:
    recognizes, ≥ 0.55 suggests a confirmation, below that the object is unknown.
 5. **Teach.** A human names unknowns and confirms suggestions. A memory is one
    physical thing with up to 24 views; the same name can cover several objects.
-6. **Sync.** Curated objects go to the fleet; the fleet's memory flows back.
+6. **Sync.** Taught objects go to the fleet automatically; the fleet's memory
+   flows back.
 
 | Component        | Choice                                                      |
 |------------------|-------------------------------------------------------------|
@@ -56,15 +57,22 @@ the Qdrant vector search engine:
 Each device keeps two local shards: a mutable one holding its own teachings and
 a read-only mirror of the fleet collection. Recognition searches both.
 
-- **Push is curated.** A human picks which objects to share. Only vectors, one
-  thumbnail, and metadata leave the device, never camera frames. An object that
-  already exists on the fleet is merged into, not duplicated.
+- **Push is automatic.** Objects a human taught or confirmed upload in batches
+  on the sync tick; anything taught offline goes up when the fleet is reachable
+  again. Only vectors, one thumbnail, and metadata leave the device, never
+  camera frames. An object that already exists on the fleet is merged into,
+  not duplicated.
 - **Pull is automatic.** The mirror updates from the fleet collection every
   ~30 seconds using
   [Qdrant's Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/).
 - **Local edits win.** Teach new views to a downloaded memory and your device
   keeps a local copy that overrides the mirror, then merges back into the fleet
   point on the next push. A sync never wipes something you taught.
+- **The fleet sleeps.** `make fleet-sleep` folds duplicate instances of the
+  same object into one memory and archives memories no device has seen in
+  months, ranked with
+  [Qdrant's decay functions](https://qdrant.tech/documentation/search/search-relevance/).
+  The hot fleet stays small, so every device's mirror does too.
 
 ## Quickstart
 
@@ -107,6 +115,12 @@ Detection is the only heavy workload; on Nvidia hardware it needs a one-line
 device change in `perception/detector.py`. A Jetson Orin Nano 8 GB can hold
 the full detection rate if the detector is exported to TensorRT.
 
+## Next Steps
+
+- Two-tier memory: recognize against one compact prototype vector per object
+  and keep the full view sets in Qdrant Cloud for confirmation. That is the
+  path from hundreds of shared objects to hundreds of thousands.
+
 ## Applications
 
 - Robot or drone fleets that share what they have seen without shipping raw video.
@@ -122,7 +136,7 @@ fleetmemory/
   config.py          # .env plumbing, fleet opt-in gate
   perception/        # detector, masked crops, embedder, embed cadence
   memory/            # store (two shards), matcher, labels, core
-  sync/              # fleet client and sync manager
+  sync/              # fleet client, sync manager, fleet-sleep job
   server/            # FastAPI app, WebSocket, capture/detect pipeline
 static/              # vanilla-JS UI + brand assets
 scripts/             # preload_scale.py (stunt shard), demo_check.py (offline preflight)
