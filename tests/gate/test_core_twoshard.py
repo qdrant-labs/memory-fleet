@@ -1,6 +1,6 @@
 """§6 gate: two-shard merge dedup, fleet-object semantics, dedup-after-pull."""
 
-from fleetmemory.memory.core import Reject, Teach
+from fleetmemory.memory.core import Confirm, Reject, Teach
 from fleetmemory.memory.store import new_id
 
 
@@ -144,3 +144,45 @@ def test_unknown_still_surfaces_with_fleet_mirror_present(hf):
     hf.seed_immutable(new_id(), "stapler", [hf.geo.view("stapler", 0.98)])
     hf.ingest(1, hf.geo.view("novel-thing"))
     assert hf.last("track_update")["state"] == "unknown"
+
+
+def test_confirm_on_fleet_object_hydrates_copy_on_write(hf):
+    """A human confirm aimed at a fleet object must not drop the teach signal:
+    the point is copied into the mutable shard (same id, dirty) and the new
+    view accretes there. The copy shadows the mirror, survives pull dedup,
+    and same-id-folds back into the fleet point on the next push."""
+    fid = new_id()
+    hf.seed_immutable(fid, "stapler", [hf.geo.view("stapler", 0.98)])
+    hf.ingest(1, hf.geo.view("stapler", 0.65))  # suggest tier
+    assert hf.track_state(1).state == "suggest"
+    hf.send(Confirm(tid=1, epoch=1, object_id=fid))
+    got = hf.store.get_object(fid)
+    assert got is not None  # hydrated into the mutable shard
+    payload, rows = got
+    assert len(rows) == 2  # the fleet view + the confirmed view
+    assert "t_sync" not in payload  # dirty: re-pushes, and...
+    assert hf.store.dedup_after_pull() == []  # ...survives the next pull
+
+
+def test_teach_same_label_folds_into_fleet_instance(hf):
+    """Teaching the SAME name while looking at the fleet-known instance folds
+    into that instance (hydrated locally) instead of spawning a sibling point
+    of the same physical thing."""
+    fid = new_id()
+    hf.seed_immutable(fid, "team mug", [hf.geo.view("mug", 0.98)])
+    hf.ingest(1, hf.geo.view("mug", 0.72))  # >= s_suggest to the fleet rows
+    hf.send(Teach(tid=1, epoch=1, label="team mug"))
+    assert hf.track_state(1).object_id == fid  # folded, no sibling
+    payload, rows = hf.store.get_object(fid)
+    assert len(rows) == 2 and "t_sync" not in payload
+    assert len(hf.store.find_label_points("team mug", mutable_only=False)) == 1
+
+
+def test_auto_views_never_hydrate_fleet_objects(hf):
+    """Passive recognition must not copy fleet objects locally — only human
+    teach signals hydrate, or every unit would dirty everything it sees."""
+    fid = new_id()
+    hf.seed_immutable(fid, "stapler", [hf.geo.view("stapler", 0.98)])
+    hf.ingest(1, hf.geo.view("stapler", 0.9))
+    assert hf.track_state(1).state == "recognized"
+    assert hf.store.get_object(fid) is None  # no local copy appeared

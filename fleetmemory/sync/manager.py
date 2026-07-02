@@ -139,8 +139,11 @@ class SyncManager:
         items = []
         now = time.time()
         for o in objs:
-            existing, existing_sim = None, 0.0
-            if o["rows"]:
+            # same-id first — the id IS the instance, regardless of the current
+            # display name (a hydrated fleet object renamed locally must still
+            # fold into its own fleet point, not overwrite it)
+            existing, existing_sim = self.client.get_point(o["id"]), 0.0
+            if existing is None and o["rows"]:
                 ours = np.stack([np.asarray(r, dtype=np.float32) for r in o["rows"]])
                 for rec in self.client.find_by_label(o["label"]):
                     frs = (rec.vector or {}).get("exemplars") or []
@@ -163,6 +166,9 @@ class SyncManager:
                     **(existing.payload or {}),
                     "views": views,
                     "t_sync": now,
+                    # label AND label_key: a renamed local copy carries the new
+                    # display name into the fold, not just the lookup key
+                    "label": o["label"],
                     "label_key": o["label"].strip().lower(),
                 }
                 self.client.upsert_object(str(existing.id), o["label"], rows, payload)

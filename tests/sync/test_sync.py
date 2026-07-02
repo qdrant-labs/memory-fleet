@@ -139,3 +139,45 @@ def test_pull_now_is_idempotent(fleet):
     time.sleep(0.2)
     n2 = a._core_call(a.store.count)
     assert n1 == n2  # repeated pulls don't duplicate or destroy anything
+
+
+def test_hydrated_confirm_and_rename_fold_by_id(fleet):
+    """Same-id ALWAYS folds at push time, even after a local rename (the
+    label lookup would miss it and a plain upsert would clobber views other
+    units folded in meanwhile). Also covers copy-on-write hydration end to
+    end: pull -> confirm adds a view locally -> push folds it back."""
+    from fleetmemory.memory.core import Confirm, Ingest, Rename
+
+    a = fleet("unit-a")
+    b = fleet("unit-b")
+    a.sync.client.ensure_collection()
+    oid = a.teach_direct("badge", "badge", n_views=2)
+    a.sync.push([oid])
+    a.wait_event("push_done")
+
+    # unit B pulls, confirms the fleet object live -> hydrates + adds a view
+    b.sync.pull_once()
+    b.wait_event("pull_applied")
+    b.core.submit(
+        Ingest(tid=1, epoch=1, vec=b.geo.view("badge", 0.9), thumb_jpeg=None, quality=1.0, t=1.0)
+    )
+    b.core.submit(Confirm(tid=1, epoch=1, object_id=oid))
+    b.wait_event("object_updated")
+    payload, rows = b._core_call(lambda: b.store.get_object(oid))
+    assert len(rows) == 3 and "t_sync" not in payload  # hydrated, dirty
+    b.sync.push([oid])
+    b.wait_event("push_done")
+
+    # unit A renames its copy (dirty again) and pushes: must fold by id
+    a.core.submit(Rename(object_id=oid, label="my badge"))
+    a.sync.push([oid])
+    t0 = time.time()  # wait_event returns the FIRST match; wait for push #2
+    while sum(e["type"] == "push_done" for e in a.events) < 2:
+        assert time.time() - t0 < 15, "second push_done never arrived"
+        time.sleep(0.05)
+
+    recs = a.client.client.retrieve(a.client.collection, ids=[oid], with_payload=True)
+    assert len(recs) == 1
+    pl = recs[0].payload or {}
+    assert pl["label"] == "my badge"  # rename carried into the fold
+    assert len(pl.get("views") or []) == 3  # B's confirmed view NOT clobbered

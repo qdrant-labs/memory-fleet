@@ -969,17 +969,23 @@ function invRow(o) {
       </div>
       <div class="inv-actions">${actions}</div>
     </div>
-    ${(o.local || o.ignored) && S.expanded === o.object_id ? viewsRow(o) : ""}`;
+    ${S.expanded === o.object_id ? viewsRow(o) : ""}`;
 }
 
 function viewsRow(o) {
+  // fleet objects show their vectors read-only: the mirror can't be pruned,
+  // and per-view thumbnails exist only on the unit that saw them (only the
+  // object thumb rides a fleet payload) — missing files render dimmed
+  const editable = o.local || o.ignored;
   return `<div class="views-row">
     ${o.views.map((v) => `
-      <span class="view-cell ${v.human ? "human" : ""}" title="${v.human ? "you taught/confirmed this view" : "auto-captured while recognized"}">
+      <span class="view-cell ${v.human ? "human" : ""}" title="${v.human ? "taught/confirmed by a human" : "auto-captured while recognized"}">
         <img src="/thumbs/${v.view_id}.jpg" alt="" onerror="this.style.opacity=.12">
-        <button class="view-x" data-oid="${o.object_id}" data-vid="${v.view_id}" title="prune this vector">✕</button>
+        ${editable ? `<button class="view-x" data-oid="${o.object_id}" data-vid="${v.view_id}" title="prune this vector">✕</button>` : ""}
       </span>`).join("")}
-    <span class="views-legend">green = taught by you · grey = auto-captured</span>
+    <span class="views-legend">${editable
+      ? "green = taught by you · grey = auto-captured"
+      : "fleet memory · pictures live on the unit that saw them · confirm it live to edit"}</span>
   </div>`;
 }
 

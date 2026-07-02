@@ -138,6 +138,20 @@ the two approved demo beats (Wi-Fi kill + second unit, below).
   the blocklist), not a one-view phantom.
 - **Label-fold push rewrites the local point under the fleet id** so the
   §3.3 id-present dedup applies verbatim on the next pull.
+- **Fleet objects hydrate copy-on-write (Dylan, 2026-07-02: pushed objects
+  were frozen — views hidden, confirms silently dropped)**: a HUMAN teach
+  signal (confirm, same-label teach fold ≥ s_suggest, archived teach) aimed
+  at a mirror object reads the mirror copy and writes the merged result into
+  the MUTABLE shard under the SAME id, dirty — it shadows the mirror
+  (mutable wins ties), survives pull dedup, and same-id-folds back into the
+  fleet point on the next push. Auto-captured views never hydrate (every
+  unit would dirty every object it sees). The mirror is never written.
+  Curation shows fleet objects' views read-only (no prune); per-view
+  thumbnails exist only on the unit that saw them. Push folds SAME-ID FIRST
+  (`client.get_point`) before the label lookup — a renamed local copy would
+  miss `find_by_label` and a plain upsert would clobber views other units
+  folded in (found in self-review; Codex was quota-blocked); the fold also
+  carries `label`, not just `label_key`, so renames propagate.
 - **Empty-delta pulls are skipped** (zero-byte body or tar without
   `segments/`); a genuinely corrupt pull rebuilds the mirror (it's a
   disposable replica) and re-seeds on the next pull.

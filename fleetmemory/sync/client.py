@@ -108,6 +108,15 @@ class FleetClient:
 
     # ---------- push (curated upsert) ----------
 
+    def get_point(self, point_id: str):
+        """The fleet point with this exact id, or None. Same-id must always
+        fold at push time — a renamed local copy would miss the label lookup
+        and a plain upsert would clobber views other units folded in."""
+        recs = self.client.retrieve(
+            self.collection, ids=[point_id], with_payload=True, with_vectors=True
+        )
+        return recs[0] if recs else None
+
     def find_by_label(self, label: str, limit: int = 8) -> list:
         """Fleet points carrying this label (instance model: several distinct
         items may share a display name). Case-insensitive via label_key."""

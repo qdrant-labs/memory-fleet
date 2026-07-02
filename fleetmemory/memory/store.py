@@ -300,6 +300,18 @@ class Store:
             rows = [np.asarray(r, dtype=np.float32) for r in rec.vector["exemplars"]]
         return rec.payload or {}, rows
 
+    def get_object_from_mirror(self, object_id: str):
+        """Fleet-mirror point -> (payload, rows) or None. Read-only source for
+        copy-on-write hydration (core._hydrate_fleet_object)."""
+        if self.immutable is None:
+            return None
+        recs = self.immutable.retrieve([object_id], with_payload=True, with_vector=True)
+        if not recs:
+            return None
+        rec = recs[0]
+        rows = [np.asarray(r, dtype=np.float32) for r in rec.vector["exemplars"]]
+        return rec.payload or {}, rows
+
     def delete(self, object_id: str):
         self.mutable.update(UpdateOperation.delete_points([object_id]))
         self._vectors_dirty = True
@@ -340,14 +352,15 @@ class Store:
         pids = self.find_label_points(label)
         return pids[0][0] if pids else None
 
-    def find_label_points(self, label: str) -> list[tuple[str, dict]]:
-        """All mutable points carrying this label — identity is the LABEL;
-        points are ≤VIEW_CAP-view buckets of it (hive scale: a name grows by
-        adding sibling points, never by unbounded multivectors)."""
+    def find_label_points(self, label: str, mutable_only: bool = True) -> list[tuple[str, dict]]:
+        """Points carrying this label — identity is the LABEL; points are
+        ≤VIEW_CAP-view buckets of it (hive scale: a name grows by adding
+        sibling points, never by unbounded multivectors). mutable_only=False
+        also surfaces fleet-mirror instances (fold targets for teach)."""
         needle = label.strip().lower()
         return [
             (pid, pl)
-            for pid, pl, _ in self.scroll_objects(mutable_only=True)
+            for pid, pl, _ in self.scroll_objects(mutable_only=mutable_only)
             if pl.get("label", "").strip().lower() == needle
         ]
 

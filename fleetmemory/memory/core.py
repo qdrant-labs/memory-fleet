@@ -405,6 +405,15 @@ class Core:
 
     def _maybe_accrete(self, object_id: str, m: Ingest, human: bool) -> bool:
         got = self.store.get_object(object_id)
+        if got is None and human:
+            # fleet object: copy-on-write. Accrete onto the mirror's content;
+            # the upsert below writes the result into the MUTABLE shard under
+            # the same id, dirty (t_sync=None) — it shadows the mirror
+            # (mutable wins ties), survives pull dedup, and same-id-folds back
+            # into the fleet point on the next push. The mirror is never
+            # written. human=False stays a no-op: auto-captured views must not
+            # dirty every fleet object a unit merely sees.
+            got = self.store.get_object_from_mirror(object_id)
         if got is None:
             return False
         payload, rows = got
@@ -495,9 +504,11 @@ class Core:
         thing; the label is its display name and may repeat. Teaching folds
         into a same-name object ONLY when the view plausibly IS that object
         (>= s_suggest to its views) — otherwise it's a new instance. Five
-        different watches = five clean points, all called "watch"."""
+        different watches = five clean points, all called "watch". Fleet
+        instances are fold targets too — accretion hydrates them copy-on-write
+        instead of spawning a local sibling of the same physical thing."""
         best, best_sim = None, 0.0
-        for pid, _pl in self.store.find_label_points(label):
+        for pid, _pl in self.store.find_label_points(label, mutable_only=False):
             rows = self.store.get_rows(pid)
             if not rows:
                 continue
@@ -522,7 +533,7 @@ class Core:
         ts = self.tracks[m.tid]
         if ts.last_vec is not None:
             fake = Ingest(m.tid, m.epoch, ts.last_vec, ts.last_thumb, ts.last_quality, ts.last_seen)
-            self._maybe_accrete(m.object_id, fake, human=True)  # no-op on fleet objects
+            self._maybe_accrete(m.object_id, fake, human=True)  # hydrates fleet objects
         got = self.store.get_object(m.object_id, with_vectors=False)
         ts.state, ts.object_id = "recognized", m.object_id
         ts.label = got[0].get("label", "") if got else ts.label
