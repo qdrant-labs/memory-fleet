@@ -372,6 +372,12 @@ body.searching #memories-panel .panel-title::after { content: "· click to clear
 .guess-pill i { font-style: normal; color: var(--amber); margin-left: 8px; font-size: 12px; }
 .guess-pill.sm { width: auto; padding: 4px 10px 4px 4px; font-size: 12.5px; }
 .guess-pill.sm img { width: 32px; height: 32px; }
+.guess-pill.ign { border-color: var(--red); background: var(--red-soft); }
+.guess-pill.ign i { color: var(--red); }
+.views-legend {
+  align-self: center; color: var(--faint); font-size: 10.5px; letter-spacing: .3px;
+  margin-left: 4px;
+}
 .unk-thumb.zoomable { cursor: zoom-in; }
 
 /* lightbox: full-size look at a remembered view */

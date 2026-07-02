@@ -126,8 +126,8 @@ const handlers = {
     S.inventory = m.items;
     // prune the curation selection: forgotten/merged/pushed-away ids must not
     // linger invisibly and feed a stale merge/push
-    const pushable = new Set(m.items.filter((o) => o.local && !o.ignored).map((o) => o.object_id));
-    for (const id of [...S.selected]) if (!pushable.has(id)) S.selected.delete(id);
+    const selectable = new Set(m.items.filter((o) => o.local).map((o) => o.object_id));
+    for (const id of [...S.selected]) if (!selectable.has(id)) S.selected.delete(id);
     bumpCounts();
     renderMemories();
     if (S.drawerMode === "inventory") renderInventory();
@@ -192,6 +192,7 @@ function mapping() {
   return { x: (view.width - w) / 2, y: (view.height - h) / 2, w, h };
 }
 
+let tickerRect = "";
 function draw() {
   if (S.dead) return;
   ctx.clearRect(0, 0, view.width, view.height);
@@ -199,6 +200,16 @@ function draw() {
   if (!m || !S.cameraOn) { $("no-feed").style.display = "flex"; return; }
   $("no-feed").style.display = "none";
   ctx.drawImage(S.frame, m.x, m.y, m.w, m.h);
+  // keep the pipeline pill on the VIDEO, not floating over letterbox bars
+  const rect = `${m.x}|${m.y + m.h}`;
+  if (rect !== tickerRect) {
+    tickerRect = rect;
+    const t = $("pipeline-ticker");
+    const pad = 14;
+    t.style.left = m.x / devicePixelRatio + pad + "px";
+    t.style.right = m.x / devicePixelRatio + pad + "px";
+    t.style.bottom = (view.height - m.y - m.h) / devicePixelRatio + pad + "px";
+  }
   for (const b of S.boxes) {
     const t = S.tracks.get(b.tid) || { state: "pending" };
     const st = t.state === "capturing" && S.bursts.has(b.tid) ? "capturing" : t.state;
@@ -533,11 +544,12 @@ function showPop(b, cx, cy) {
         <button class="pop-btn ghost" data-act="ignore">ignore</button>
       </div>`;
   } else if (t.state === "suggest") {
-    // picture pills: pick WHICH remembered object this is
+    // picture pills: pick WHICH remembered object this is (red = an ignored look)
     const pills = (t.guesses || []).map((g) => `
-      <button class="guess-pill" data-oid="${g.object_id}">
+      <button class="guess-pill ${g.ignored ? "ign" : ""}"
+              ${g.ignored ? 'data-ign="1"' : `data-oid="${g.object_id}"`}>
         <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
-        <span>${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
+        <span>${g.ignored ? "⊘ " : ""}${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
       </button>`).join("");
     html = `<h4>is it one of these?</h4>
       <div class="guess-grid">${pills}</div>
@@ -563,9 +575,14 @@ function showPop(b, cx, cy) {
   const inp = $("teach-name");
   if (inp) { inp.focus(); inp.onkeydown = (ev) => { if (ev.key === "Enter") act("teach", t); }; }
   pop.onclick = (ev) => {
-    const el = ev.target.closest("[data-oid],[data-hint],[data-act]");
+    const el = ev.target.closest("[data-oid],[data-hint],[data-act],[data-ign]");
     if (!el) return;
     const d = el.dataset;
+    if (d.ign) {  // "it's that ignored thing" — fold this view into the blocklist
+      send({ cmd: "ignore_track", tid: S.pop.tid, epoch: S.pop.epoch });
+      hidePop();
+      return;
+    }
     if (d.oid) {  // picture pill: confirm THIS instance
       send({ cmd: "confirm", tid: S.pop.tid, epoch: S.pop.epoch, object_id: d.oid });
       hidePop();
@@ -582,7 +599,7 @@ function showPop(b, cx, cy) {
 
 function guessChips(guesses, hints) {
   // picture pills: nearest memories (teach that name); blue chips: detector guesses
-  const mem = (guesses || []).map((g) => `
+  const mem = (guesses || []).filter((g) => !g.ignored).map((g) => `
     <button class="guess-pill sm" data-hint="${esc(g.label)}">
       <img src="${g.thumb ? "data:image/jpeg;base64," + g.thumb : ""}" alt="">
       <span>${esc(g.label)}<i>${g.score.toFixed(2)}</i></span>
@@ -604,7 +621,13 @@ function act(a, t) {
     toast(`learning «${label}» — rotate it slowly`);
   } else if (a === "confirm") send({ cmd: "confirm", tid, epoch, object_id: t.object_id });
   else if (a === "reject") send({ cmd: "reject", tid, epoch, object_id: t.object_id });
-  else if (a === "ignore") send({ cmd: "ignore_track", tid, epoch });
+  else if (a === "ignore") {
+    // ignoring a RECOGNIZED box means "ignore that remembered object",
+    // not "blocklist this one anonymous view"
+    if (t.state === "recognized" && t.object_id)
+      send({ cmd: "ignore_object", object_id: t.object_id });
+    else send({ cmd: "ignore_track", tid, epoch });
+  }
   hidePop();
 }
 function hidePop() { $("popover").classList.add("hidden"); S.pop = null; }
@@ -787,7 +810,7 @@ function invRow(o) {
       : "";
   return `
     <div class="inv-item" data-id="${o.object_id}">
-      ${o.local && !o.ignored ? `<input type="checkbox" class="inv-check" data-id="${o.object_id}"
+      ${o.local ? `<input type="checkbox" class="inv-check" data-id="${o.object_id}"
         ${S.selected.has(o.object_id) ? "checked" : ""}>` : ""}
       <img class="inv-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">
       <div class="inv-main">
@@ -802,17 +825,22 @@ function invRow(o) {
 function viewsRow(o) {
   return `<div class="views-row">
     ${o.views.map((v) => `
-      <span class="view-cell ${v.human ? "human" : ""}" title="${v.human ? "human-taught view" : "auto-captured view"}">
+      <span class="view-cell ${v.human ? "human" : ""}" title="${v.human ? "you taught/confirmed this view" : "auto-captured while recognized"}">
         <img src="/thumbs/${v.view_id}.jpg" alt="" onerror="this.style.opacity=.12">
         <button class="view-x" data-oid="${o.object_id}" data-vid="${v.view_id}" title="prune this vector">✕</button>
       </span>`).join("")}
+    <span class="views-legend">green = taught by you · grey = auto-captured</span>
   </div>`;
 }
 
 function updateCuration() {
   const n = S.selected.size;
-  $("btn-push").disabled = n === 0 || !S.fleetOn;
-  $("btn-push").textContent = n ? `⛟ PUSH ${n} TO FLEET` : "⛟ PUSH TO FLEET";
+  const pushable = [...S.selected].filter((id) => {
+    const o = S.inventory.find((x) => x.object_id === id);
+    return o && !o.ignored;
+  }).length;
+  $("btn-push").disabled = pushable === 0 || !S.fleetOn;
+  $("btn-push").textContent = pushable ? `⛟ PUSH ${pushable} TO FLEET` : "⛟ PUSH TO FLEET";
   $("btn-merge").disabled = n !== 2;
 }
 $("btn-push").onclick = () => {

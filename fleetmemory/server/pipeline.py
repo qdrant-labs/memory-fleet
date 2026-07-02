@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 BROADCAST_WIDTH = 960
 THUMB_SIZE = 224  # big enough for the lightbox; only ONE rides in a fleet payload
 DRIVE_FPS = 5.0  # drive mode: synthetic clock, deterministic against fed frames
+# Live pacing: unpaced, the detector runs MPS at 100% duty (~13 fps) and cooks
+# the laptop for nothing — the demo's ingest target is ~5-8 fps (PLAN §8.2).
+# Frames are still READ at camera rate (keeps the buffer fresh, no lag);
+# detection/broadcast only runs when a tick is due.
+TARGET_FPS = 8.0
 
 
 class CameraSource:
@@ -99,6 +104,7 @@ class Pipeline:
         self._tick_times: list[float] = []
         self._last_perf = 0.0
         self._cls_seen: dict[int, Counter] = {}  # tid -> detector class guesses
+        self._last_tick = 0.0
 
     # -- lifecycle --
 
@@ -183,6 +189,11 @@ class Pipeline:
                 src_open = False
                 self._stop.wait(1.0)
                 continue
+            if not self.drive_mode:  # pace live ingest; drive mode runs flat out
+                now = time.time()
+                if now - self._last_tick < 1.0 / TARGET_FPS:
+                    continue  # frame consumed (buffer stays fresh), no GPU spent
+                self._last_tick = now
             self._tick(frame)
         if src_open:
             self.source.close()

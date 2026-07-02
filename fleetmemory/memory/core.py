@@ -342,19 +342,23 @@ class Core:
         self._emit({"type": "query", "tid": m.tid, "ms": res.latency_ms, "searched": res.searched})
         d = decide(m.vec, res.candidates, self.thresholds, ts.vetoed, self.session_negs)
         # nearest memories as picture pills: at suggest tier you pick WHICH
-        # instance it is; at unknown tier they're one-click teach options
+        # instance it is; at unknown tier they're one-click teach options.
+        # Ignored entries ride along (flagged) — "it's that thing I ignored"
+        # is a one-click answer too.
         ts.guesses = []
         for c in res.candidates:
-            if c.kind != "object" or c.payload.get("synthetic") or not c.label:
+            if c.payload.get("synthetic") or c.score < 0.3:
                 continue
-            if c.score < 0.3:
+            ignored = c.kind == "ignored"
+            if not ignored and not c.label:
                 continue
             ts.guesses.append(
                 {
                     "object_id": c.id,
-                    "label": c.label,
+                    "label": c.label or "ignored look",
                     "score": round(c.score, 2),
                     "thumb": c.payload.get("thumb", ""),
+                    "ignored": ignored,
                 }
             )
             if len(ts.guesses) == 3:
@@ -631,6 +635,9 @@ class Core:
             return
         kp, krows = keep
         fp, frows = fold
+        if kp.get("kind", "object") != fp.get("kind", "object"):
+            self._emit({"type": "error", "message": "can't merge an object with an ignored look"})
+            return
         views = list(kp.get("views") or [])
         krows, views = fold_rows(krows, views, frows, list(fp.get("views") or []))
         negs = (list(kp.get("neg") or []) + list(fp.get("neg") or []))[-NEG_CAP:]
@@ -639,6 +646,7 @@ class Core:
             kp.get("label", ""),
             krows,
             views,
+            kind=kp.get("kind", "object"),  # merging ignored entries keeps them ignored
             neg=negs,
             device=kp.get("device", ""),
             event=kp.get("event", ""),
