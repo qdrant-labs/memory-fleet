@@ -106,6 +106,7 @@ class Store:
             )
 
         self.scale = None  # optional stunt shard, attached on demand
+        self._scale_dir: Path | None = None
         self._vectors_dirty = True
         self._vector_cache = 0
         self.immutable = None
@@ -160,6 +161,19 @@ class Store:
                 )
         cands = sorted(best.values(), key=lambda c: c.score, reverse=True)
         return RecognitionResult(cands, latency_ms, self.vector_count())
+
+    def disk_bytes(self) -> int:
+        """On-disk footprint of the attached shards (thumbs excluded) — the
+        "your whole memory fits in N MB" HUD number. Counts ALLOCATED blocks,
+        not apparent size: Edge preallocates 32 MB sparse mmap/WAL files, so
+        st_size over-reports an empty shard by ~200 MB."""
+        dirs = [self.data_dir / "mutable"]
+        if self.immutable is not None:
+            dirs.append(self.data_dir / "immutable")
+        if self._scale_dir is not None:
+            dirs.append(self._scale_dir)
+        files = (f for d in dirs if d.exists() for f in d.rglob("*") if f.is_file())
+        return sum(f.stat().st_blocks * 512 for f in files)
 
     def vector_count(self) -> int:
         """Total exemplar VECTORS in memory — the honest HUD number: an object
@@ -445,12 +459,14 @@ class Store:
         if self.scale is not None or not path.exists():
             return False
         self.scale = EdgeShard.load(str(path))
+        self._scale_dir = path
         return True
 
     def detach_scale_shard(self):
         if self.scale is not None:
             self.scale.close()
             self.scale = None
+            self._scale_dir = None
 
     # ---------- sync support (id-present dedup rule) ----------
 

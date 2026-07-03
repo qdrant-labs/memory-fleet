@@ -77,12 +77,15 @@ def create_app(settings: Settings) -> FastAPI:
     # the shards are core-thread-only, so _hello must not call into the store;
     # track the last known count from the event stream instead
     app.state.mem_count = store.vector_count()  # safe: core thread hasn't started yet
+    app.state.disk_bytes = store.disk_bytes()
 
     def on_core_event(e: dict):
         if "memories" in e:
             app.state.mem_count = e["memories"]
         elif e.get("type") == "query":
             app.state.mem_count = e["searched"]
+        if "disk_bytes" in e:
+            app.state.disk_bytes = e["disk_bytes"]
         app.state.pipeline.note_event(e)
         hub.broadcast(e)
 
@@ -200,6 +203,7 @@ def _hello(app) -> dict:
         "fleet": settings.fleet_enabled,
         "fleet_online": bool(sync and sync.online),  # current state, not just transitions
         "memories": app.state.mem_count,
+        "disk_bytes": app.state.disk_bytes,
         "thresholds": {"s_same": t.s_same, "s_suggest": t.s_suggest, "s_ignore": t.s_ignore},
         "detector_conf": app.state.pipeline.detector.conf,
         "detector_max_area": app.state.pipeline.detector.max_area,

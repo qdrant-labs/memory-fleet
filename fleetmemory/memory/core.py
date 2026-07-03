@@ -1059,6 +1059,7 @@ class Core:
             {
                 "type": "stats",
                 "memories": self.store.vector_count(),
+                "disk_bytes": self.store.disk_bytes(),
                 "fleet": self.store.immutable is not None,
             }
         )

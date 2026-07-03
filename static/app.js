@@ -13,6 +13,7 @@ const S = {
   frame: null,
   latencies: [],
   memories: 0,
+  diskBytes: null,
   inventory: [],
   archived: new Map(),   // "tid:epoch" -> {tid, epoch, thumb, t}
   drawerMode: null,
@@ -55,6 +56,7 @@ const handlers = {
     setFleet(!!m.fleet_online); // current sync state; fleet_status keeps it live
     setCamera(m.camera !== false);
     S.memories = m.memories;
+    S.diskBytes = m.disk_bytes;
     bumpCounts();
     initSliders(m.thresholds, m.detector_conf, m.detector_max_area ?? 0.2, m.target_fps ?? 8);
     send({ cmd: "inventory" });
@@ -99,7 +101,7 @@ const handlers = {
     if (S.drawerMode === "unknowns") renderUnknowns();
   },
   burst_progress(m) { S.bursts.set(m.tid, m); S.dirty = true; },
-  stats(m) { S.memories = m.memories; bumpCounts(); },
+  stats(m) { S.memories = m.memories; S.diskBytes = m.disk_bytes ?? S.diskBytes; bumpCounts(); },
   fleet_status(m) {
     setFleet(m.online);
     toast(m.online ? "fleet linked · memories syncing" : "fleet unreachable · running local");
@@ -179,6 +181,15 @@ function bumpCounts() {
   $("m-memories").textContent = S.memories.toLocaleString();
   $("t-count").textContent = S.memories.toLocaleString();
   $("m-objects").textContent = S.inventory.filter((o) => !o.ignored).length;
+  if (S.diskBytes != null) {
+    // big number + unit in the label: "3 · MB ON DISK"
+    const mb = S.diskBytes / 1048576;
+    const [v, u] = mb >= 1024 ? [(mb / 1024).toFixed(1), "GB"]
+      : mb >= 1 ? [Math.round(mb), "MB"]
+      : [Math.max(1, Math.round(S.diskBytes / 1024)), "KB"];
+    $("m-disk").textContent = v;
+    $("m-disk-label").textContent = `${u} on disk`;
+  }
 }
 
 // ---------- clock ----------
