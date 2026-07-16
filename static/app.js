@@ -27,6 +27,7 @@ const S = {
   cameraOn: true,
   searchHits: null,
   searchResults: null,
+  recall: null,
   mapPoints: [],
   scaleOn: false,
   t0: Date.now(),
@@ -145,6 +146,10 @@ const handlers = {
     refreshData();
   },
   fleet_error(m) { toast(`fleet: ${m.message}`); },
+  recall_answer(m) {
+    S.recall = m;
+    renderRecallAnswer();
+  },
   search_results(m) {
     S.searchResults = m;
     S.searchHits = m.text ? new Set(m.hits.map((h) => h.object_id)) : null;
@@ -639,6 +644,91 @@ mapC.addEventListener("click", (e) => {
   if (p) searchFor(p.label, p.object_id);
 });
 
+// ---------- voice: mic -> 16kHz mono WAV -> /voice (whisper on-device) ----------
+let micHolding = false;  // one hold at a time across all mic buttons
+
+async function micOpen() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const ctx = new AudioContext();
+  const src = ctx.createMediaStreamSource(stream);
+  const node = ctx.createScriptProcessor(4096, 1, 1);  // output stays silent (not written)
+  const chunks = [];
+  node.onaudioprocess = (e) => chunks.push(e.inputBuffer.getChannelData(0).slice());
+  src.connect(node); node.connect(ctx.destination);
+  return { stream, ctx, node, chunks, rate: ctx.sampleRate };
+}
+
+async function micClose(m) {
+  m.node.disconnect();
+  m.stream.getTracks().forEach((t) => t.stop());
+  await m.ctx.close();
+  let n = 0; for (const c of m.chunks) n += c.length;
+  const samples = new Float32Array(n);
+  let o = 0; for (const c of m.chunks) { samples.set(c, o); o += c.length; }
+  return encodeWav16k(samples, m.rate);
+}
+
+function encodeWav16k(samples, rate) {
+  const target = 16000, ratio = rate / target, n = Math.floor(samples.length / ratio);
+  const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, target, true); v.setUint32(28, target * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, "data"); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {  // linear-interp downsample, plenty for speech
+    const idx = i * ratio, lo = Math.floor(idx), hi = Math.min(lo + 1, samples.length - 1);
+    const s = Math.max(-1, Math.min(1, samples[lo] * (1 - (idx - lo)) + samples[hi] * (idx - lo)));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+// hold-to-talk. Each hold is one self-contained flow: the target url is read at
+// PRESS time; the release is a Promise so a mic that opens AFTER the user let go
+// still tears down (no stuck recorder); pointer capture keeps the release on
+// this button even if it drifts out of bounds or the popover hides mid-hold.
+// pointercancel discards. micHolding serializes so one button never flushes
+// another's audio to the wrong url.
+function holdToTalk(btn, urlFor, onResult) {
+  btn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    if (micHolding) return;
+    micHolding = true;
+    const url = urlFor();
+    try { btn.setPointerCapture(e.pointerId); } catch { /* no pointer id */ }
+    btn.classList.add("recording");
+
+    let release;
+    const released = new Promise((r) => (release = r));  // true = send, false = discard
+    const onUp = () => release(true);
+    const onCancel = () => release(false);
+    btn.addEventListener("pointerup", onUp, { once: true });
+    btn.addEventListener("pointercancel", onCancel, { once: true });
+
+    (async () => {
+      let m = null;
+      try { m = await micOpen(); }
+      catch { toast("allow microphone access to use voice"); }
+      const send = await released;  // wait for the user to let go (already resolved if quick-tapped)
+      btn.classList.remove("recording");
+      btn.removeEventListener("pointerup", onUp);
+      btn.removeEventListener("pointercancel", onCancel);
+      micHolding = false;
+      if (!m) return;               // mic never opened (denied)
+      const wav = await micClose(m);
+      if (!send) return;            // pointercancel -> throw the clip away
+      const res = await fetch(url, { method: "POST", body: wav }).then((r) => r.json()).catch(() => null);
+      if (!res || res.error === "silence") toast("didn't catch that, try again");
+      else onResult(res);
+    })();
+  });
+}
+
+holdToTalk($("mic-ask"), () => "/voice?mode=ask", (res) => {
+  if (res.transcript) $("search").value = res.transcript;  // recall_answer arrives over WS
+});
+
 // ---------- search ----------
 let searchTimer = null;
 $("search").oninput = () => {
@@ -649,13 +739,21 @@ $("search").oninput = () => {
     send({ cmd: "search", text });
   }, 220);
 };
+// Enter = ask: "where did I leave my keys?" -> one answer card, retrieval-driven
+$("search").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const text = $("search").value.trim();
+  if (text) send({ cmd: "recall", text });
+});
 
 function clearSearch() {
   $("search").value = "";
   S.searchHits = null;
   S.searchResults = null;
+  S.recall = null;
   document.body.classList.remove("searching");
   $("search-clear").classList.add("hidden");
+  renderRecallAnswer();
   renderSearchResults();
   drawMap();
 }
@@ -664,6 +762,44 @@ $("search-clear").onclick = clearSearch;
 document.querySelector("#memories-panel .panel-title").onclick = () => {
   if (document.body.classList.contains("searching")) clearSearch();
 };
+
+let recallSeq = 0;  // invalidates in-flight phrase replies when the card changes/clears
+function renderRecallAnswer() {
+  const seq = ++recallSeq;
+  const box = $("recall-answer");
+  if (!S.recall) { box.className = "hidden"; box.innerHTML = ""; return; }
+  const { answer, text } = S.recall;
+  box.className = "";
+  if (!answer) {
+    box.innerHTML = `<div class="recall-miss">no memory of «${esc(text)}» on the fleet yet</div>`;
+    return;
+  }
+  // the unit is named after its room, so the last-seen device IS the location
+  const where = answer.device || "the fleet";
+  const when = answer.last_seen ? relTime(answer.last_seen) : "at some point";
+  const also = answer.instances > 1 ? ` · ${answer.instances} instances` : "";
+  box.innerHTML = `
+    <img class="recall-thumb" src="${answer.thumb ? "data:image/jpeg;base64," + answer.thumb : ""}" alt="">
+    <div class="recall-main">
+      <div class="recall-label">${esc(answer.label)}</div>
+      <div class="recall-where">last seen <b>${when}</b> · <b>${esc(where)}</b>${also}</div>
+      <div class="recall-say"></div>
+    </div>`;
+  // optional garnish: local LLM phrases the grounded fact; failure leaves the card as-is
+  fetch("/phrase", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label: answer.label, when, where }),
+  }).then((r) => r.json()).then((d) => {
+    const say = box.querySelector(".recall-say");
+    if (seq === recallSeq && d.sentence && say) say.textContent = `“${d.sentence}”`;
+  }).catch(() => {});
+  box.onclick = () => {
+    pulseMapNode(answer.object_id);
+    S.expanded = answer.object_id;
+    openDrawer("inventory");
+  };
+}
 
 function renderSearchResults() {
   const box = $("search-results");
@@ -765,7 +901,10 @@ function showPop(b, cx, cy) {
         <button class="pop-btn ghost" data-act="ignore">ignore</button>
       </div>
       <input type="text" id="teach-name" placeholder="or teach a new name…">
-      <div class="pop-row"><button class="pop-btn" data-act="teach">teach</button></div>`;
+      <div class="pop-row">
+        <button class="pop-btn" data-act="teach">teach</button>
+        <button class="pop-btn mic" id="mic-teach" title="hold and say: this is my…">🎙</button>
+      </div>`;
   } else {
     const title = t.state === "ignored" ? "ignored look · teach to rescue" : "unknown · teach me";
     html = `<h4>${title}</h4>
@@ -773,6 +912,7 @@ function showPop(b, cx, cy) {
       <input type="text" id="teach-name" placeholder="what is this?">
       <div class="pop-row">
         <button class="pop-btn" data-act="teach">teach</button>
+        <button class="pop-btn mic" id="mic-teach" title="hold and say: this is my…">🎙</button>
         <button class="pop-btn ghost" data-act="ignore">ignore</button>
       </div>`;
   }
@@ -782,6 +922,9 @@ function showPop(b, cx, cy) {
   pop.style.top = Math.min(cy, view.clientHeight - 170) + "px";
   const inp = $("teach-name");
   if (inp) { inp.focus(); inp.onkeydown = (ev) => { if (ev.key === "Enter") act("teach", t); }; }
+  const micT = $("mic-teach");
+  if (micT) holdToTalk(micT, () => `/voice?mode=teach&tid=${S.pop.tid}&epoch=${S.pop.epoch}`,
+    (res) => { if (res.label) toast(`learning «${res.label}» · rotate it slowly`); });
   pop.onclick = (ev) => {
     const el = ev.target.closest("[data-oid],[data-hint],[data-act],[data-ign]");
     if (!el) return;

@@ -138,11 +138,15 @@ class FleetClient:
         )
         return recs
 
-    def touch_seen(self, ids: list, t: float):
+    def touch_seen(self, ids: list, t: float, device: str = ""):
         """Freshness heartbeat: recognized objects get t_seen stamped so the
-        decay job spares them. Ids not on the fleet (still-dirty locals) are
+        decay job spares them, and last_seen_device records which unit saw them
+        (recall's 'which room'). Ids not on the fleet (still-dirty locals) are
         silently skipped by Qdrant."""
-        self.client.set_payload(self.collection, payload={"t_seen": t}, points=ids)
+        payload = {"t_seen": t}
+        if device:
+            payload["last_seen_device"] = device
+        self.client.set_payload(self.collection, payload=payload, points=ids)
 
     def upsert_object(self, point_id: str, label: str, rows: list, payload: dict):
         vector = {"exemplars": [list(map(float, r)) for r in rows]}

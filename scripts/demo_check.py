@@ -52,6 +52,12 @@ def label_models():
     assert len(dense) == 384 and len(list(sparse.indices)) > 0
 
 
+def whisper():
+    from fleetmemory.perception import asr
+
+    asr.load()  # whisper-base via onnx-asr; must be cached before the venue
+
+
 def edge():
     import tempfile
 
@@ -69,6 +75,7 @@ def main():
             check("YOLOE detector (local weights)", detector),
             check("Unicom embedder (fastembed cache)", embedder),
             check("miniCOIL + dense label models (fastembed cache)", label_models),
+            check("whisper-base speech (onnx-asr cache)", whisper),
             check("Qdrant Edge shard create/load", edge),
         ]
     )

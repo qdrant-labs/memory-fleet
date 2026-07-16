@@ -235,6 +235,22 @@ body {
 .result-score { width: 66px; height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
 .result-score i { display: block; height: 100%; background: var(--red); }
 .result-none { color: var(--faint); padding: 4px 10px 8px; font-size: 13.5px; }
+
+/* recall answer: the "where did I leave it?" hero card, retrieval-driven */
+#recall-answer { display: flex; align-items: center; gap: 14px; cursor: pointer;
+  padding: 12px; margin: 4px 0 12px; border-radius: 11px;
+  border: 1px solid var(--violet); border-left: 4px solid var(--red);
+  background: linear-gradient(180deg, rgba(124, 140, 255, .12), rgba(220, 36, 76, .06)); }
+#recall-answer.hidden { display: none; }
+.recall-thumb { width: 72px; height: 72px; border-radius: 7px; object-fit: cover; background: var(--well); flex: 0 0 auto; }
+.recall-main { min-width: 0; }
+.recall-label { font-size: 22px; font-weight: 650; color: var(--text); text-transform: capitalize;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recall-where { font-size: 14px; color: var(--dim); margin-top: 3px; }
+.recall-where b { color: var(--text); }
+.recall-say { font-size: 13px; color: var(--blue); margin-top: 5px; font-style: italic; }
+.recall-say:empty { display: none; }
+.recall-miss { color: var(--faint); padding: 10px 12px; font-size: 13.5px; }
 .result-main { flex: 1; min-width: 0; }
 .result-meta { font-size: 12.5px; color: var(--faint); }
 .result-meta .seen { color: var(--dim); }
@@ -398,6 +414,14 @@ aside.hidden { transform: translateX(107%); box-shadow: none; }
 .pop-btn.ghost { background: none; border: 1px solid var(--border); color: var(--dim); }
 .pop-btn.ghost:hover { color: var(--text); }
 .pop-btn.ok { background: var(--green); color: #05231a; }
+/* voice: hold-to-talk mics (search bar + teach popover) */
+.pop-btn.mic { flex: 0 0 auto; padding: 8px 12px; background: var(--panel2); border: 1px solid var(--border); }
+.mic-btn { background: none; border: none; color: var(--dim); font-size: 16px; cursor: pointer;
+  padding: 0 4px; line-height: 1; border-radius: 6px; touch-action: none; }
+.mic-btn:hover { color: var(--text); }
+.mic-btn.recording, .pop-btn.mic.recording { color: white; background: var(--red);
+  animation: mic-pulse 1s ease-in-out infinite; }
+@keyframes mic-pulse { 50% { box-shadow: 0 0 0 4px var(--red-soft); } }
 
 /* ---------- flow particle ---------- */
 .mem-pulse {

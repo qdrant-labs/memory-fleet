@@ -142,7 +142,7 @@ class SyncManager:
         self.core.submit(DrainSightings(reply=reply))
         seen = reply.get(timeout=REPLY_TIMEOUT)
         if seen:
-            self.client.touch_seen(seen, time.time())
+            self.client.touch_seen(seen, time.time(), device=self.core.device_name)
 
     # ---------- push: prepare (core) -> fleet ops (here) -> mark (core) ----------
 
@@ -187,6 +187,9 @@ class SyncManager:
                     "views": views,
                     "t_sync": now,
                     "t_seen": now,  # decay freshness: pushing IS an interaction
+                    # ...so the room must move too, or recall pairs "just now"
+                    # with a stale sibling's device and names the wrong room
+                    "last_seen_device": self.core.device_name,
                     # label AND label_key: a renamed local copy carries the new
                     # display name into the fold, not just the lookup key
                     "label": o["label"],
@@ -216,6 +219,7 @@ class SyncManager:
                     "t_created": o["t_created"],
                     "t_sync": now,
                     "t_seen": now,  # decay freshness: pushing IS an interaction
+                    "last_seen_device": self.core.device_name,  # keep room paired to t_seen
                     "views": o["views"],
                     "neg": o["neg"],
                     "thumb": o["thumb"],

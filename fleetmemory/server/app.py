@@ -8,7 +8,7 @@ import logging
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -52,11 +52,15 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.core.start()
         app.state.pipeline.start()
 
-        # warm the label models off-thread so the first teach/search doesn't stall
-        def warm_labels():
+        # warm the label + speech models off-thread so the first teach/search/
+        # voice command doesn't stall
+        def warm_models():
             label_embedder.load()
+            from fleetmemory.perception import asr
 
-        threading.Thread(target=warm_labels, name="labels-warm", daemon=True).start()
+            asr.load()
+
+        threading.Thread(target=warm_models, name="models-warm", daemon=True).start()
         if app.state.sync is not None:
             app.state.sync.start()
         yield
@@ -128,6 +132,77 @@ def create_app(settings: Settings) -> FastAPI:
         if not p.is_file() or not view_id.isalnum():
             return Response(status_code=404)
         return FileResponse(p, media_type="image/jpeg")
+
+    @app.post("/voice")
+    async def voice(request: Request):
+        """Browser mic (16 kHz mono WAV body) -> on-device whisper -> a verb.
+        mode=teach names the popover's current unknown; mode=ask runs recall.
+        Results flow back over the WS, same as a typed command."""
+        import tempfile
+
+        from fleetmemory.perception import asr
+
+        data = await request.body()
+        if not data:
+            return {"transcript": "", "error": "no audio"}
+
+        def work():
+            with tempfile.NamedTemporaryFile(suffix=".wav") as f:
+                f.write(data)
+                f.flush()
+                return asr.transcribe(f.name)
+
+        text = await asyncio.to_thread(work)
+        if not text:
+            return {"transcript": "", "error": "silence"}  # dead mic or no permission
+        if request.query_params.get("mode") == "teach":
+            try:
+                tid = int(request.query_params["tid"])
+                epoch = int(request.query_params["epoch"])
+            except (KeyError, ValueError):
+                return {"transcript": text, "error": "no target"}
+            label = asr.parse_label(text)
+            core.submit(verbs.Teach(tid=tid, epoch=epoch, label=label))
+            return {"transcript": text, "label": label}
+        core.submit(verbs.RecallRequest(text=text))
+        return {"transcript": text}
+
+    @app.post("/phrase")
+    async def phrase(request: Request):
+        """Optional garnish: a local LLM (Ollama) phrases the retrieved fact as
+        one spoken sentence. It is handed ONLY label/when/where and told to
+        invent nothing, so retrieval stays the source of truth. Ollama absent,
+        slow, or erroring -> empty, and the UI keeps its grounded card."""
+        import json as _json
+        import os
+        import urllib.request
+
+        a = await request.json()
+        label = str(a.get("label", ""))
+        if not label:
+            return {"sentence": ""}
+        model = os.environ.get("FM_PHRASE_MODEL", "gemma2:2b")
+        prompt = (
+            "You are a home assistant. In ONE short spoken sentence, tell the user "
+            "where their item is, using ONLY these facts and inventing nothing:\n"
+            f"item: {label}\nlast seen: {a.get('when', 'recently')}\n"
+            f"location: {a.get('where', 'unknown')}\nSentence:"
+        )
+
+        def work():
+            body = _json.dumps({"model": model, "prompt": prompt, "stream": False}).encode()
+            req = urllib.request.Request(
+                "http://localhost:11434/api/generate",
+                body,
+                {"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=6) as r:  # noqa: S310 (localhost)
+                return _json.loads(r.read()).get("response", "").strip()
+
+        try:
+            return {"sentence": await asyncio.to_thread(work)}
+        except (OSError, TimeoutError, ValueError):  # Ollama absent/slow/bad reply
+            return {"sentence": ""}
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -289,6 +364,8 @@ def _to_message(m: dict, cmd: str):
             return verbs.InventoryRequest()
         case "search":
             return verbs.SearchRequest(text=str(m.get("text", "")))
+        case "recall":
+            return verbs.RecallRequest(text=str(m.get("text", "")))
         case "map":
             return verbs.MapRequest()
         case "scale":

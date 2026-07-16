@@ -83,11 +83,21 @@ def consolidate(client: FleetClient, dry_run: bool = False) -> int:
                     list(fp.get("views") or []),
                 )
                 mats[i] = np.asarray(rows, dtype=np.float32)
+                # the fresher sibling's sighting wins both the time AND the room.
+                # ponytail: if the fresher one carries no room, we fall back to the
+                # older sibling's — a rare stale pairing on a legacy payload, not
+                # worth a third source; consolidation runs while units are quiet
+                fresher = fp if (fp.get("t_seen") or 0) > (kp.get("t_seen") or 0) else kp
                 keep.payload = {
                     **kp,
                     "views": views,
                     "neg": (list(kp.get("neg") or []) + list(fp.get("neg") or []))[-NEG_CAP:],
                     "t_seen": max(kp.get("t_seen") or 0, fp.get("t_seen") or 0) or None,
+                    "last_seen_device": (
+                        fresher.get("last_seen_device")
+                        or fresher.get("device")
+                        or kp.get("last_seen_device", "")
+                    ),
                     "thumb": kp.get("thumb") or fp.get("thumb", ""),
                 }
                 gone.add(j)

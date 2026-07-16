@@ -10,6 +10,8 @@ dependencies = [
     "numpy>=2.0.0,<2.3.0",
     "qdrant-client>=1.15",  # fleet push (upsert) — pulls stay native snapshots
     "requests>=2.32",  # snapshot downloads (iter_content — r.raw corrupts the tar)
+    "onnx-asr>=0.12.0",
+    "onnxruntime>=1.27.0",
 ]
 
 [project.optional-dependencies]

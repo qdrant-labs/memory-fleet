@@ -262,16 +262,21 @@ class Store:
             rows = [np.asarray(r, dtype=np.float32) for r in rec.vector["exemplars"]]
         return rec.payload or {}, rows
 
-    def get_object_from_mirror(self, object_id: str):
+    def get_object_from_mirror(self, object_id: str, with_vectors: bool = True):
         """Fleet-mirror point -> (payload, rows) or None. Read-only source for
-        copy-on-write hydration (core._maybe_accrete)."""
+        copy-on-write hydration (core._maybe_accrete); recall reads payload only
+        (with_vectors=False) so it doesn't materialize exemplars for a timestamp."""
         if self.immutable is None:
             return None
-        recs = self.immutable.retrieve([object_id], with_payload=True, with_vector=True)
+        recs = self.immutable.retrieve([object_id], with_payload=True, with_vector=with_vectors)
         if not recs:
             return None
         rec = recs[0]
-        rows = [np.asarray(r, dtype=np.float32) for r in rec.vector["exemplars"]]
+        rows = (
+            [np.asarray(r, dtype=np.float32) for r in rec.vector["exemplars"]]
+            if with_vectors
+            else []
+        )
         return rec.payload or {}, rows
 
     def delete(self, object_id: str):

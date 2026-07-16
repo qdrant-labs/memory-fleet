@@ -62,6 +62,20 @@ def fold_rows(krows: list, kviews: list, frows: list, fviews: list) -> tuple[lis
     return krows, kviews
 
 
+def resolve_recall(metas: list[dict]) -> dict | None:
+    """The recall answer from label-search hits (strongest match first): the
+    freshest sighting among the instances that share the top hit's name. Five
+    'hat' points are one thing to a human — the answer is wherever a hat was
+    seen most recently, not whichever instance the fusion ranked first."""
+    if not metas:
+        return None
+    target = metas[0].get("label", "").strip().lower()
+    group = [m for m in metas if m.get("label", "").strip().lower() == target]
+    answer = dict(max(group, key=lambda m: m.get("last_seen", 0.0)))
+    answer["instances"] = len(group)
+    return answer
+
+
 # ---------- messages ----------
 
 
@@ -165,6 +179,13 @@ class DismissUnknown:
 
 @dataclass(slots=True)
 class SearchRequest:
+    text: str
+
+
+@dataclass(slots=True)
+class RecallRequest:
+    """'Where did I leave my keys?' — one answer: where the thing was last seen."""
+
     text: str
 
 
@@ -392,7 +413,14 @@ class Core:
             self.sightings[obj] = (count + 1, m.t)
             self._fleet_seen.add(obj)
             if d.candidate.from_mutable:
-                self.store.set_payload(obj, {"sightings": count + 1, "t_seen": m.t})
+                self.store.set_payload(
+                    obj,
+                    {
+                        "sightings": count + 1,
+                        "t_seen": m.t,
+                        "last_seen_device": self.device_name,  # this unit IS the room
+                    },
+                )
         if state == "recognized" and d.candidate.from_mutable:
             self._maybe_accrete(d.candidate.id, m, human=False)
         if changed or state in ("recognized", "suggest"):
@@ -503,6 +531,9 @@ class Core:
                 device=self.device_name,
                 event=self.event_tag,
                 thumb=thumb_b64,
+                # seed the sighting: the object is in frame at teach time, so
+                # "where is my mug?" right after teaching names this room
+                base_payload={"t_seen": now, "last_seen_device": self.device_name},
             )
             self._emit({"type": "object_created", "object_id": object_id, "label": label})
 
@@ -899,6 +930,43 @@ class Core:
             "created": pl.get("t_created", 0.0),
         }
 
+    def _last_seen(self, object_id: str, payload: dict) -> tuple[float, str]:
+        """Recall's 'where and when': the most recent sighting across three
+        sources, taking the freshest time and the device that saw it then.
+        A local shadow can hold a stale t_seen while another unit stamped the
+        fleet copy more recently — that's the teach-on-A/recognize-on-B beat."""
+        best_t = float(payload.get("t_seen") or 0.0)
+        best_dev = payload.get("last_seen_device") or payload.get("device", "")
+        live = self.sightings.get(object_id, (0, 0.0))[1]  # this session, this unit
+        if live > best_t:
+            best_t, best_dev = live, self.device_name
+        mirror = self.store.get_object_from_mirror(object_id, with_vectors=False)
+        if mirror is not None:
+            mpl = mirror[0]
+            mt = float(mpl.get("t_seen") or 0.0)
+            if mt > best_t:
+                best_t = mt
+                best_dev = mpl.get("last_seen_device") or mpl.get("device", "")
+        return best_t, best_dev
+
+    def _on_recallrequest(self, m: RecallRequest):
+        # search only names the WINNING label; the freshest instance of that
+        # name may sit outside the top-N search page, so group over every
+        # instance of it (full scroll — cheap at demo scale), not the hits
+        results, ms = self.store.search_text(m.text)
+        top = next(
+            (c for c, _ in results if c.kind == "object" and not c.payload.get("synthetic")),
+            None,
+        )
+        metas = []
+        if top is not None:
+            for pid, pl in self.store.find_label_points(top.label, mutable_only=False):
+                meta = self._object_meta(pid, pl, local=False)  # recall shows the room
+                meta["last_seen"], meta["device"] = self._last_seen(pid, pl)
+                metas.append(meta)
+        answer = resolve_recall(metas)
+        self._emit({"type": "recall_answer", "text": m.text, "ms": round(ms, 2), "answer": answer})
+
     def _on_maprequest(self, m: MapRequest):
         objs = self.store.object_mean_vectors()
         points = []
@@ -1003,6 +1071,10 @@ class Core:
             if got is not None and it.get("fingerprint") is not None:
                 if _push_fingerprint(got[0]) != it["fingerprint"]:
                     continue  # edited mid-push: stays dirty, next push carries the edit
+            # a sighting during the in-flight push stamps t_seen/last_seen_device
+            # without changing the fingerprint, so carry the CURRENT payload
+            # through the rewrite (base_payload rule) or the fold wipes it
+            base = got[0] if got is not None else None
             if "fleet_id" in it and it["fleet_id"] != old_id:
                 # label-fold: rewrite under the fleet id — upsert FIRST, delete
                 # after, so a failure never loses the local teaching
@@ -1016,6 +1088,7 @@ class Core:
                     event=self.event_tag,
                     thumb=it.get("thumb", ""),
                     t_sync=it["t_sync"],
+                    base_payload=base,
                 )
                 self.store.delete(old_id)
                 for ts in self.tracks.values():
@@ -1032,6 +1105,7 @@ class Core:
                     event=self.event_tag,
                     thumb=it.get("thumb", ""),
                     t_sync=it["t_sync"],
+                    base_payload=base,
                 )
             else:
                 self.store.set_payload(old_id, {"t_sync": it["t_sync"]})

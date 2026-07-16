@@ -11,6 +11,10 @@ recognize it. No model is trained or fine-tuned at any point: recognizing
 something is a vector search over the fleet's shared memory, and teaching
 something new is adding vectors to it.
 
+You teach by typing a name or by speaking it ("this is my mug"). Asking where an
+object was last seen ("where did I leave my keys?") is another vector search: the
+fleet answers with the device that saw it last and when.
+
 Each device learns locally and works fully offline. When a connection is
 available, devices share what they learned through a central collection in
 Qdrant Cloud. One unit learns, all units know.
@@ -37,8 +41,9 @@ the Qdrant vector search engine:
    into 512-d vectors on-device.
 4. **Match.** A vector search over the local shards decides: similarity ≥ 0.80
    recognizes, ≥ 0.55 suggests a confirmation, below that the object is unknown.
-5. **Teach.** A human names unknowns and confirms suggestions. A memory is one
-   physical thing with up to 24 views; the same name can cover several objects.
+5. **Teach.** A human names unknowns and confirms suggestions, by typing or by
+   voice. A memory is one physical thing with up to 24 views; the same name can
+   cover several objects.
 6. **Sync.** Taught objects go to the fleet automatically; the fleet's memory
    flows back.
 
@@ -49,6 +54,7 @@ the Qdrant vector search engine:
 | Detector         | YOLOE-11L-seg prompt-free (ultralytics) + BoT-SORT tracking |
 | Image embedding  | Unicom ViT-B/32, 512-d, via fastembed (ONNX, CPU)           |
 | Text search      | miniCOIL sparse + bge-small dense, fused with RRF           |
+| Speech           | whisper-base via onnx-asr (ONNX, CPU), on-device           |
 | Server           | FastAPI + one WebSocket                                     |
 | UI               | Vanilla JS, no build step                                   |
 
@@ -134,7 +140,7 @@ the full detection rate if the detector is exported to TensorRT.
 ```
 fleetmemory/
   config.py          # .env plumbing, fleet opt-in gate
-  perception/        # detector, masked crops, embedder, embed cadence
+  perception/        # detector, masked crops, embedder, speech, embed cadence
   memory/            # store (two shards), matcher, labels, core
   sync/              # fleet client, sync manager, fleet-sleep job
   server/            # FastAPI app, WebSocket, capture/detect pipeline
