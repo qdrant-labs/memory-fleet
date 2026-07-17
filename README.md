@@ -1,51 +1,53 @@
 # Fleet Memory
 
-Shared object memory on Qdrant Edge: every device remembers what any device learned.
+Shared object memory on Qdrant Edge: show one device an object once, and every
+device in the fleet can recognize it.
+
+**No LLM is used at runtime.** Recognition is local vector search over shared
+object memory; teaching is just adding new vectors, labels, thumbnails, and
+metadata.
 
 ![Fleet Memory mission control: live feed with recognized objects, memory map, and fleet search](docs/screenshot-ui.png)
 
-## The Idea
+## What It Does
 
-Show a device an object once, give it a name, and every device in the fleet can
-recognize it. No model is trained or fine-tuned at any point: recognizing
-something is a vector search over the fleet's shared memory, and teaching
-something new is adding vectors to it.
+Fleet Memory lets a group of devices learn objects from each other without
+training, fine-tuning, or shipping raw video around.
 
-You teach by typing a name or by speaking it ("this is my mug"). Asking where an
-object was last seen ("where did I leave my keys?") is another vector search: the
-fleet answers with the device that saw it last and when.
+Teach an object by typing a name or speaking one ("this is my mug"). From then
+on, every synced device can recognize that object. Ask where something was last
+seen ("where did I leave my keys?") and the fleet answers from memory: which
+device saw it, and when.
 
-Each device learns locally and works fully offline. When a connection is
-available, devices share what they learned through a central collection in
-Qdrant Cloud. One unit learns, all units know.
+Each device works locally and offline. When a connection is available, devices
+sync what they learned through a shared Qdrant Cloud collection. One unit
+learns; all units know.
 
 ## Why Qdrant Edge
 
-The demo runs on [Qdrant Edge](https://qdrant.tech/edge/), the embedded build of
-the Qdrant vector search engine:
+Fleet Memory runs on [Qdrant Edge](https://qdrant.tech/edge/), the embedded
+build of Qdrant:
 
-- **On-device search.** The engine runs inside the app process, against shards
-  on local disk. Recognition never leaves the device and needs no server.
-- **Fully offline.** Without a fleet configured, or with the network down,
-  everything keeps working. Sync resumes on its own when the fleet is reachable.
-- **Native Cloud sync.** Local shards synchronize with a Qdrant Cloud collection
-  through [Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/):
-  snapshot-based pulls, automatic batched pushes.
+- **Local recognition:** vector search runs inside the app process against
+  shards on disk.
+- **Offline first:** a device can keep teaching and recognizing with no fleet
+  connection.
+- **Native sync:** local shards synchronize with Qdrant Cloud through
+  [Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/).
 
-## Architecture and Stack
+## How It Works
 
-1. **Capture.** A grabber thread owns the webcam and streams video (~25 fps).
-2. **Detect.** YOLOE proposes and tracks regions at ~8 Hz. Its class labels are
-   discarded; people and body parts are filtered out.
-3. **Embed.** Stable regions are cropped to their segmentation mask and embedded
-   into 512-d vectors on-device.
-4. **Match.** A vector search over the local shards decides: similarity ≥ 0.80
-   recognizes, ≥ 0.55 suggests a confirmation, below that the object is unknown.
-5. **Teach.** A human names unknowns and confirms suggestions, by typing or by
-   voice. A memory is one physical thing with up to 24 views; the same name can
-   cover several objects.
-6. **Sync.** Taught objects go to the fleet automatically; the fleet's memory
-   flows back.
+1. **Capture:** a webcam thread streams video at about 25 fps.
+2. **Detect:** YOLOE proposes and tracks regions at about 8 Hz. Class labels are
+   discarded, and people/body parts are filtered out.
+3. **Embed:** stable masked crops are embedded into 512-dimensional vectors
+   on-device.
+4. **Match:** local Qdrant Edge shards return nearest memories. Similarity
+   >= 0.80 recognizes; >= 0.55 suggests confirmation; lower is unknown.
+5. **Teach:** a human names unknowns and confirms suggestions by voice or text.
+   A memory is one physical thing with up to 24 views.
+6. **Sync:** taught objects push to the fleet automatically, and fleet memory
+   flows back to each device.
 
 | Component        | Choice                                                      |
 |------------------|-------------------------------------------------------------|
@@ -54,31 +56,26 @@ the Qdrant vector search engine:
 | Detector         | YOLOE-11L-seg prompt-free (ultralytics) + BoT-SORT tracking |
 | Image embedding  | Unicom ViT-B/32, 512-d, via fastembed (ONNX, CPU)           |
 | Text search      | miniCOIL sparse + bge-small dense, fused with RRF           |
-| Speech           | whisper-base via onnx-asr (ONNX, CPU), on-device           |
+| Speech           | whisper-base via onnx-asr (ONNX, CPU), on-device            |
 | Server           | FastAPI + one WebSocket                                     |
 | UI               | Vanilla JS, no build step                                   |
 
-## How Fleet Sync Works
+## Fleet Sync
 
-Each device keeps two local shards: a mutable one holding its own teachings and
-a read-only mirror of the fleet collection. Recognition searches both.
+Each device keeps two local shards: a writable shard for its own teachings and a
+read-only mirror of the fleet collection. Recognition searches both.
 
-- **Push is automatic.** Objects a human taught or confirmed upload in batches
-  on the sync tick; anything taught offline goes up when the fleet is reachable
-  again. Only vectors, one thumbnail, and metadata leave the device, never
-  camera frames. An object that already exists on the fleet is merged into,
-  not duplicated.
-- **Pull is automatic.** The mirror updates from the fleet collection every
-  ~30 seconds using
-  [Qdrant's Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/).
-- **Local edits win.** Teach new views to a downloaded memory and your device
-  keeps a local copy that overrides the mirror, then merges back into the fleet
-  point on the next push. A sync never wipes something you taught.
-- **The fleet sleeps.** `make fleet-sleep` folds duplicate instances of the
-  same object into one memory and archives memories no device has seen in
-  months, ranked with
-  [Qdrant's decay functions](https://qdrant.tech/documentation/search/search-relevance/).
-  The hot fleet stays small, so every device's mirror does too.
+- **Push:** taught or confirmed objects upload in batches. Offline teachings
+  push when the fleet is reachable again.
+- **Pull:** the fleet mirror refreshes about every 30 seconds through Qdrant
+  Edge synchronization.
+- **Privacy:** only vectors, one thumbnail, and metadata leave the device.
+  Camera frames stay local.
+- **Conflict handling:** local edits win. New views taught to a downloaded
+  memory override the mirror locally, then merge back on the next push.
+- **Fleet sleep:** `make fleet-sleep` merges duplicate instances and archives
+  stale memories using
+  [Qdrant decay functions](https://qdrant.tech/documentation/search/search-relevance/).
 
 ## Quickstart
 
@@ -86,69 +83,76 @@ Requirements: macOS on Apple Silicon, Python 3.12,
 [uv](https://docs.astral.sh/uv/), and a webcam.
 
 ```bash
-git clone https://github.com/qdrant-labs/memory-fleet.git && cd memory-fleet
-make setup          # install dependencies
-make run            # http://127.0.0.1:8765 (first run downloads ~500 MB of model weights)
-```
-
-Fleet sync is optional. Without a `.env`, the app runs fully local:
-
-```bash
-cp .env.example .env
-# QDRANT_URL + QDRANT_API_KEY  -> a Qdrant Cloud cluster (the fleet)
-# DEVICE_NAME                  -> names this unit in the fleet
-# EVENT_TAG                    -> tag stamped on pushed objects
-# FM_MODEL                     -> detector size; drop to 11m/11s on a slower or fanless machine
+git clone https://github.com/qdrant-labs/memory-fleet.git
+cd memory-fleet
+make setup
 make run
 ```
 
-On a fanless or slower Mac (e.g. MacBook Air M3), set `FM_MODEL=yoloe-11m-seg-pf.pt`
-(or `-11s-`) to cut heat and keep detection real-time. Swapping size leaves
-stored memory untouched.
+Open `http://127.0.0.1:8765`. The first run downloads about 500 MB of model
+weights.
 
-Second device on the same laptop (port 8766, own data dir and name):
+Fleet sync is optional. Without a `.env`, the app runs fully local. To join a
+fleet:
 
 ```bash
-make run-b
+cp .env.example .env
 ```
 
-Scale stunt: `make demo-scale` builds a synthetic shard of 300k vectors; press
-`S` in the UI to attach it live and watch recognition latency barely move.
-`make reset` wipes local memory.
+Set these values:
 
-Porting beyond a laptop (ballpark, not measured on this app):
+```bash
+QDRANT_URL=...        # Qdrant Cloud cluster URL
+QDRANT_API_KEY=...    # Qdrant Cloud API key
+DEVICE_NAME=desk-a    # this unit's fleet name
+EVENT_TAG=demo        # tag stamped on pushed objects
+FM_MODEL=...          # optional detector size
+```
 
-- **Minimum:** 4-core CPU, 8 GB RAM, GTX 1650-class GPU, at a reduced
-  detection rate (tunable live, 2-15 per second).
+On fanless or slower Macs, set `FM_MODEL=yoloe-11m-seg-pf.pt` or
+`FM_MODEL=yoloe-11s-seg-pf.pt` to reduce heat. Stored memory is unchanged.
+
+Useful demo targets:
+
+```bash
+make run-b        # second device on port 8766 with its own data dir
+make demo-scale   # build a synthetic 300k-vector shard; press S to attach it
+make reset        # wipe local memory
+```
+
+## Hardware Notes
+
+Detection is the heavy workload. On Nvidia hardware, set the detector device in
+`fleetmemory/perception/detector.py`.
+
+- **Minimum:** 4-core CPU, 8 GB RAM, GTX 1650-class GPU, with detection rate
+  reduced live to 2-15 Hz.
 - **Recommended:** 16 GB RAM, RTX 3060 or Jetson Orin NX class.
-
-Detection is the only heavy workload; on Nvidia hardware it needs a one-line
-device change in `perception/detector.py`. A Jetson Orin Nano 8 GB can hold
-the full detection rate if the detector is exported to TensorRT.
-
-## Next Steps
-
-- Two-tier memory: recognize against one compact prototype vector per object
-  and keep the full view sets in Qdrant Cloud for confirmation. That is the
-  path from hundreds of shared objects to hundreds of thousands.
+- **Jetson Orin Nano 8 GB:** likely full-rate with the detector exported to
+  TensorRT.
 
 ## Applications
 
 - Robot or drone fleets that share what they have seen without shipping raw video.
-- Retail and warehouse device fleets learning a shared inventory from any unit.
+- Retail and warehouse devices learning shared inventory from any unit.
 - Wearables and smart cameras that recognize objects a peer taught them.
-- Any edge fleet where devices must learn from each other while images stay on
-  the device.
+- Edge fleets where local learning, privacy, and shared memory all matter.
+
+## Next Step
+
+The next scale path is two-tier memory: recognize against one compact prototype
+vector per object, then keep full view sets in Qdrant Cloud for confirmation.
+That moves the demo from hundreds of shared objects toward hundreds of thousands.
 
 ## Repo Layout
 
-```
+```text
 fleetmemory/
   config.py          # .env plumbing, fleet opt-in gate
   perception/        # detector, masked crops, embedder, speech, embed cadence
-  memory/            # store (two shards), matcher, labels, core
+  memory/            # store, matcher, labels, core
   sync/              # fleet client, sync manager, fleet-sleep job
   server/            # FastAPI app, WebSocket, capture/detect pipeline
 static/              # vanilla-JS UI + brand assets
-scripts/             # preload_scale.py (stunt shard), demo_check.py (offline preflight)
+scripts/             # preload_scale.py, demo_check.py
 ```
