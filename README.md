@@ -46,8 +46,8 @@ build of Qdrant:
    >= 0.80 recognizes; >= 0.55 suggests confirmation; lower is unknown.
 5. **Teach:** a human names unknowns and confirms suggestions by voice or text.
    A memory is one physical thing with up to 24 views.
-6. **Sync:** taught objects push to the fleet automatically, and fleet memory
-   flows back to each device.
+6. **Sync:** you choose which memories to push to the fleet, and fleet memory
+   flows back to every device automatically.
 
 | Component        | Choice                                                      |
 |------------------|-------------------------------------------------------------|
@@ -65,8 +65,8 @@ build of Qdrant:
 Each device keeps two local shards: a writable shard for its own teachings and a
 read-only mirror of the fleet collection. Recognition searches both.
 
-- **Push:** taught or confirmed objects upload in batches. Offline teachings
-  push when the fleet is reachable again.
+- **Push:** opt-in. A teaching stays local and editable until you select it in
+  curation and push it to the fleet. Nothing uploads on its own.
 - **Pull:** the fleet mirror refreshes about every 30 seconds through Qdrant
   Edge synchronization.
 - **Privacy:** only vectors, one thumbnail, and metadata leave the device.
@@ -76,6 +76,9 @@ read-only mirror of the fleet collection. Recognition searches both.
 - **Fleet sleep:** `make fleet-sleep` merges duplicate instances and archives
   stale memories using
   [Qdrant decay functions](https://qdrant.tech/documentation/search/search-relevance/).
+- **Fleet ops:** an operator console at `/fleet-ops` to clean up the shared
+  collection directly, renaming, merging, or deleting memories and individual
+  vectors when a wrong one slips in.
 
 ## Quickstart
 
