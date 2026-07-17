@@ -98,8 +98,13 @@ cp .env.example .env
 # QDRANT_URL + QDRANT_API_KEY  -> a Qdrant Cloud cluster (the fleet)
 # DEVICE_NAME                  -> names this unit in the fleet
 # EVENT_TAG                    -> tag stamped on pushed objects
+# FM_MODEL                     -> detector size; drop to 11m/11s on a slower or fanless machine
 make run
 ```
+
+On a fanless or slower Mac (e.g. MacBook Air M3), set `FM_MODEL=yoloe-11m-seg-pf.pt`
+(or `-11s-`) to cut heat and keep detection real-time. Swapping size leaves
+stored memory untouched.
 
 Second device on the same laptop (port 8766, own data dir and name):
 

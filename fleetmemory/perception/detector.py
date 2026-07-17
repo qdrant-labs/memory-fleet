@@ -78,8 +78,9 @@ class Proposal:
 class Detector:
     """YOLOE-11L-seg prompt-free wrapper: load once, track frames, labels dropped."""
 
-    def __init__(self, conf: float = DEFAULT_CONF):
+    def __init__(self, conf: float = DEFAULT_CONF, model: str | None = None):
         self.model = None
+        self.weights = model or WEIGHTS  # FM_MODEL flipper: 11s/11m for slower machines
         self.device = None
         self.conf = conf  # live-tunable
         self.max_area = MAX_AREA  # live-tunable: biggest proposal kept, frame fraction
@@ -95,9 +96,9 @@ class Detector:
         from ultralytics import YOLO
 
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
-        repo_weights = Path(__file__).resolve().parents[2] / WEIGHTS
-        logger.info("loading %s on %s", WEIGHTS, self.device)
-        self.model = YOLO(str(repo_weights) if repo_weights.exists() else WEIGHTS)
+        repo_weights = Path(__file__).resolve().parents[2] / self.weights
+        logger.info("loading %s on %s", self.weights, self.device)
+        self.model = YOLO(str(repo_weights) if repo_weights.exists() else self.weights)
 
     def warm(self):
         self.load()

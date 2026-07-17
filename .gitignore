@@ -19,6 +19,7 @@ edge-data*/
 
 # local working notes (not shipped)
 CLAUDE.md
+PLAN.md
 
 # local test harness (not shipped)
 tests/

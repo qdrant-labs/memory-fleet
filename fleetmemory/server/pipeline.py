@@ -74,11 +74,11 @@ class Pipeline:
     thread that runs YOLOE on the latest frame, and an embed thread. Everything
     else flows to the core as messages."""
 
-    def __init__(self, core: Core, source, broadcast):
+    def __init__(self, core: Core, source, broadcast, model: str | None = None):
         self.core = core
         self.source = source
         self.broadcast = broadcast  # thread-safe callable(dict)
-        self.detector = Detector()
+        self.detector = Detector(model=model)
         self.embedder = Embedder()
         self.scheduler = EmbedScheduler()
         self.burst_tids: set[int] = set()  # updated from core events (GIL-safe set ops)

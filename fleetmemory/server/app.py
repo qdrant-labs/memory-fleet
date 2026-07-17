@@ -100,7 +100,7 @@ def create_app(settings: Settings) -> FastAPI:
         on_event=on_core_event,
     )
     source = CameraSource(0)
-    pipeline = Pipeline(core, source, hub.broadcast)
+    pipeline = Pipeline(core, source, hub.broadcast, model=settings.detector_model)
 
     sync = None
     if settings.fleet_enabled:

@@ -41,6 +41,7 @@ class Settings:
     event_tag: str
     port: int
     data_dir: Path
+    detector_model: str | None
 
     @property
     def fleet_enabled(self) -> bool:
@@ -64,4 +65,5 @@ def load_settings(
         event_tag=merged.get("EVENT_TAG") or "dev",
         port=port,
         data_dir=Path(merged.get("FM_DATA_DIR") or "edge-data"),
+        detector_model=merged.get("FM_MODEL") or None,
     )
