@@ -82,8 +82,8 @@ read-only mirror of the fleet collection. Recognition searches both.
 
 ## Quickstart
 
-Requirements: macOS on Apple Silicon, Python 3.12,
-[uv](https://docs.astral.sh/uv/), and a webcam.
+Requirements: macOS on Apple Silicon, or Linux with an NVIDIA GPU or CPU.
+Python 3.12, [uv](https://docs.astral.sh/uv/), and a webcam.
 
 ```bash
 git clone https://github.com/qdrant-labs/memory-fleet.git
@@ -125,14 +125,20 @@ make reset        # wipe local memory
 
 ## Hardware Notes
 
-Detection is the heavy workload. On Nvidia hardware, set the detector device in
-`fleetmemory/perception/detector.py`.
+Detection is the heavy workload. The detector picks its device automatically:
+CUDA if an NVIDIA GPU is present, then Apple Silicon (MPS), then CPU. Set
+`FM_DEVICE=cpu` to force CPU on a shared-GPU box.
 
-- **Minimum:** 4-core CPU, 8 GB RAM, GTX 1650-class GPU, with detection rate
-  reduced live to 2-15 Hz.
-- **Recommended:** 16 GB RAM, RTX 3060 or Jetson Orin NX class.
-- **Jetson Orin Nano 8 GB:** likely full-rate with the detector exported to
-  TensorRT.
+The default model follows the device: `yoloe-11l-seg-pf` on a GPU, the lighter
+`yoloe-11m-seg-pf` on CPU. Override with `FM_MODEL` (for example
+`yoloe-11s-seg-pf.pt` on the weakest CPU-only rigs). The model choice does not
+change stored memory.
+
+- **Minimum:** 4-core CPU, 8 GB RAM; detection rate reduced live to 2-15 Hz.
+- **Recommended:** 16 GB RAM with a GPU (Apple Silicon, RTX 3060, or Jetson
+  Orin NX class).
+- **Cameras:** USB webcams work on macOS and Linux. Jetson CSI cameras need a
+  GStreamer source and are not wired up yet.
 
 ## Applications
 

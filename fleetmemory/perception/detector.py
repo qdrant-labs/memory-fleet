@@ -1,4 +1,4 @@
-"""Class-agnostic object proposals + tracking (YOLOE-11L, prompt-free).
+"""Class-agnostic object proposals + tracking (YOLOE-11, prompt-free).
 
 The detector's built-in vocabulary drives detection; its labels are discarded.
 Names come from vector search only. Tracking (BoT-SORT via ultralytics) gives
@@ -25,7 +25,8 @@ except ImportError:  # non-macOS: nothing to drain
 
 logger = logging.getLogger(__name__)
 
-WEIGHTS = "yoloe-11l-seg-pf.pt"  # auto-downloads to repo root (gitignored)
+WEIGHTS = "yoloe-11l-seg-pf.pt"  # GPU default (MPS/CUDA); auto-downloads to repo root
+CPU_WEIGHTS = "yoloe-11m-seg-pf.pt"  # lighter default when no GPU is present
 IMGSZ = 640
 MAX_DET = 64
 DEFAULT_CONF = 0.30  # tuned for live webcam scenes; live-tunable in the UI
@@ -75,12 +76,33 @@ class Proposal:
     cls: str = ""  # YOLOE's guess, surfaced as a suggestion chip in the teach popover
 
 
+def pick_device() -> str:
+    """cuda > mps > cpu. FM_DEVICE overrides (e.g. force cpu on a shared GPU box)."""
+    forced = os.environ.get("FM_DEVICE")
+    if forced:
+        return forced
+    import torch
+
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def resolve_weights(override: str | None = None) -> str:
+    """FM_MODEL override wins; otherwise the heavier model on GPU, lighter on CPU."""
+    if override:
+        return override
+    return WEIGHTS if pick_device() in ("cuda", "mps") else CPU_WEIGHTS
+
+
 class Detector:
-    """YOLOE-11L-seg prompt-free wrapper: load once, track frames, labels dropped."""
+    """YOLOE-11 seg prompt-free wrapper: load once, track frames, labels dropped."""
 
     def __init__(self, conf: float = DEFAULT_CONF, model: str | None = None):
         self.model = None
-        self.weights = model or WEIGHTS  # FM_MODEL flipper: 11s/11m for slower machines
+        self.weights = model  # FM_MODEL override; None -> chosen by device in load()
         self.device = None
         self.conf = conf  # live-tunable
         self.max_area = MAX_AREA  # live-tunable: biggest proposal kept, frame fraction
@@ -92,10 +114,10 @@ class Detector:
     def load(self):
         if self.model is not None:
             return
-        import torch
         from ultralytics import YOLO
 
-        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        self.device = pick_device()
+        self.weights = resolve_weights(self.weights)
         repo_weights = Path(__file__).resolve().parents[2] / self.weights
         logger.info("loading %s on %s", self.weights, self.device)
         self.model = YOLO(str(repo_weights) if repo_weights.exists() else self.weights)

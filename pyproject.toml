@@ -23,13 +23,19 @@ perception = [
     # (~80 MB/min measured); draining a pool per detector call flattens it
     "pyobjc-core>=10; sys_platform == 'darwin'",
     "fastembed>=0.7.4",
-    "opencv-python>=4.12.0",
+    "opencv-python-headless>=4.12.0",  # headless: no libGL on servers/Jetson/containers
 ]
 
 [dependency-groups]
 dev = [
     "ruff>=0.11",
 ]
+
+[tool.uv]
+# ultralytics pulls full opencv-python (links libGL, absent on headless Linux /
+# Jetson / containers). The impossible marker stops it from installing at all,
+# so ultralytics imports cv2 from opencv-python-headless instead — same module.
+override-dependencies = ["opencv-python; sys_platform == 'nonexistent'"]
 
 [tool.ruff]
 line-length = 100

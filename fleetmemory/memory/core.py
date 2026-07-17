@@ -210,11 +210,10 @@ class ManifestRequest:
 
 @dataclass(slots=True)
 class PreparePush:
-    """Sync worker asks for push-ready copies of mutable objects (kind=object,
-    non-synthetic). object_ids=None means every dirty confirmed object —
-    the auto-push sweep. Reply: list of dicts with rows/views/payload fields."""
+    """Sync worker asks for push-ready copies of the given mutable objects
+    (kind=object, non-synthetic). Reply: list of dicts with rows/views/payload."""
 
-    object_ids: list | None
+    object_ids: list
     reply: object
 
 
@@ -1034,12 +1033,6 @@ class Core:
 
     def _on_preparepush(self, m: PreparePush):
         ids = m.object_ids
-        if ids is None:  # auto-push sweep: every confirmed object not yet on the fleet
-            ids = [
-                pid
-                for pid, pl, _ in self.store.scroll_objects(mutable_only=True)
-                if not pl.get("t_sync") and not pl.get("synthetic")
-            ]
         out = []
         for oid in ids:
             got = self.store.get_object(oid)

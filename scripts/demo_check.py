@@ -26,12 +26,11 @@ def check(name, fn):
 
 
 def detector():
-    from fleetmemory.perception.detector import WEIGHTS, Detector
+    from fleetmemory.perception.detector import Detector, resolve_weights
 
-    weights = Path(WEIGHTS)
-    assert weights.exists(), f"{WEIGHTS} missing from repo root (would download at the venue)"
-    d = Detector()
-    d.warm()
+    weights = resolve_weights(os.environ.get("FM_MODEL"))  # same rule the app uses
+    assert Path(weights).exists(), f"{weights} missing from repo root (would download at the venue)"
+    Detector(model=weights).warm()
 
 
 def embedder():

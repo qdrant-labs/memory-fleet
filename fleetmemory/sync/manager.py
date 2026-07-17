@@ -196,15 +196,13 @@ class SyncManager:
 
     # ---------- push: prepare (core) -> fleet ops (here) -> mark (core) ----------
 
-    def push(self, object_ids: list | None):
-        """object_ids=None is the auto-push sweep: all dirty confirmed objects,
-        silent when there is nothing to send (no 'nothing to push' toast)."""
+    def push(self, object_ids: list):
+        """Push the user-selected confirmed objects to the fleet."""
         reply: queue.Queue = queue.Queue()
         self.core.submit(PreparePush(object_ids=object_ids, reply=reply))
         objs = reply.get(timeout=REPLY_TIMEOUT)
-        if not objs:  # everything filtered (blocklist/synthetic/missing)
-            if object_ids is not None:  # a user-initiated push still gets an ack
-                self.core.submit(MarkPushed(items=[]))
+        if not objs:  # everything filtered (blocklist/synthetic/missing) — still ack
+            self.core.submit(MarkPushed(items=[]))
             return
         items = []
         now = time.time()

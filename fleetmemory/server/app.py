@@ -55,10 +55,19 @@ def create_app(settings: Settings) -> FastAPI:
         # warm the label + speech models off-thread so the first teach/search/
         # voice command doesn't stall
         def warm_models():
-            label_embedder.load()
-            from fleetmemory.perception import asr
+            try:
+                label_embedder.load()
+                from fleetmemory.perception import asr
 
-            asr.load()
+                asr.load()
+            except Exception:
+                logger.exception("label/speech model warm-up failed")
+                hub.broadcast(
+                    {
+                        "type": "error",
+                        "message": "label/speech models failed to load — see server log",
+                    }
+                )
 
         threading.Thread(target=warm_models, name="models-warm", daemon=True).start()
         if app.state.sync is not None:
