@@ -148,6 +148,82 @@ class FleetClient:
             payload["last_seen_device"] = device
         self.client.set_payload(self.collection, payload=payload, points=ids)
 
+    # ---------- operator console (hidden /fleet-ops view) ----------
+
+    def scroll_all(self, with_vectors: bool = False) -> list:
+        """Every fleet point (paged). Payload-only by default — the ops view
+        renders labels and thumbs, not vectors."""
+        out, offset = [], None
+        while True:
+            recs, offset = self.client.scroll(
+                self.collection,
+                limit=256,
+                offset=offset,
+                with_payload=True,
+                with_vectors=with_vectors,
+            )
+            out.extend(recs)
+            if offset is None:
+                return out
+
+    def delete(self, point_id: str):
+        self.client.delete(self.collection, points_selector=[point_id])
+
+    def merge(self, keep_id: str, fold_id: str) -> bool:
+        """Fold one fleet point into another (dedup duplicate instances). Same
+        diversity-gated, view-capped fold as local merge and push; keep's label
+        and payload win. Object+object or ignored+ignored only."""
+        from fleetmemory.memory.core import fold_rows
+
+        if keep_id == fold_id:
+            return False
+        keep, fold = self.get_point(keep_id), self.get_point(fold_id)
+        if keep is None or fold is None:
+            return False
+        kp, fp = keep.payload or {}, fold.payload or {}
+        if kp.get("kind", "object") != fp.get("kind", "object"):
+            return False
+        krows = (keep.vector or {}).get("exemplars") or []
+        frows = (fold.vector or {}).get("exemplars") or []
+        kviews, fviews = list(kp.get("views") or []), list(fp.get("views") or [])
+        rows, views = fold_rows(krows, kviews, frows, fviews)
+        self.upsert_object(keep_id, kp.get("label", ""), rows, {**kp, "views": views})
+        self.delete(fold_id)
+        return True
+
+    def prune_view(self, point_id: str, view_id: str) -> bool:
+        """Drop one exemplar from a fleet point (a wrong crop that snuck in).
+        Rows and views are index-aligned; remove both at that index. The last
+        vector gone means the whole point goes (nothing left to recognize)."""
+        rec = self.get_point(point_id)
+        if rec is None:
+            return False
+        rows = list((rec.vector or {}).get("exemplars") or [])
+        views = list((rec.payload or {}).get("views") or [])
+        idx = next((i for i, v in enumerate(views) if v.get("view_id") == view_id), None)
+        if idx is None or idx >= len(rows):
+            return False
+        rows.pop(idx)
+        views.pop(idx)
+        if not rows:
+            self.delete(point_id)
+            return True
+        pl = rec.payload or {}
+        self.upsert_object(point_id, pl.get("label", ""), rows, {**pl, "views": views})
+        return True
+
+    def relabel(self, point_id: str, label: str) -> bool:
+        """Rename a fleet point in place. The label vectors encode the old
+        name, so re-upsert (which re-embeds them) rather than just setting
+        the payload; keeps label_key in step for case-insensitive folds."""
+        rec = self.get_point(point_id)
+        if rec is None:
+            return False
+        rows = (rec.vector or {}).get("exemplars") or []
+        payload = {**(rec.payload or {}), "label": label, "label_key": label.strip().lower()}
+        self.upsert_object(point_id, label, rows, payload)
+        return True
+
     def upsert_object(self, point_id: str, label: str, rows: list, payload: dict):
         vector = {"exemplars": [list(map(float, r)) for r in rows]}
         if self.labels is not None:  # miniCOIL sparse + dense, same models as on-device

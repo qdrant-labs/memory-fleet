@@ -131,7 +131,6 @@ class SyncManager:
             self.client.ensure_collection()
             self._ensured = True
             self.pull_once()  # seed / catch-up on boot
-            self.push(None)  # teachings from an offline session go up right away
             self._set_online(True)
         except Exception as e:
             logger.info("sync: fleet unreachable at boot (%s) — running local-first", e)
@@ -151,7 +150,6 @@ class SyncManager:
                     self._ensured = True
                 if job[0] == "pull":
                     self.pull_once()
-                    self.push(None)  # dirty confirmed objects ride the pull tick
                     self.touch_sightings()  # decay must spare what units still see
                     next_pull = time.time() + self.interval
                 elif job[0] == "push":

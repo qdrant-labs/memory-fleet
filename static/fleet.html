@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Ops · Qdrant Edge</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  /* the shared stylesheet locks the camera dashboard to one screen; this page scrolls */
+  html, body { height: auto; overflow: auto; }
+  #ops { max-width: 860px; margin: 0 auto; padding: 22px 20px 80px; }
+  #ops header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  #ops h1 { font-family: var(--mono); font-size: 18px; letter-spacing: 1.5px; color: var(--text); margin: 0; }
+  #ops h1 b { color: var(--red); }
+  .ops-warn { color: var(--faint); font-size: 12.5px; margin: 2px 0 18px; }
+  .ops-warn b { color: var(--red); }
+  #ops-filter {
+    width: 100%; box-sizing: border-box; margin-bottom: 14px; padding: 10px 12px;
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; font-family: var(--mono); font-size: 14px;
+  }
+  #ops-filter:focus { outline: none; border-color: var(--red); }
+  #ops-list .inv-item { cursor: pointer; }
+  .ops-empty { color: var(--faint); padding: 14px 4px; }
+  #merge-bar {
+    position: sticky; bottom: 0; margin-top: 14px; padding: 12px; display: none;
+    align-items: center; gap: 12px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  #merge-bar.show { display: flex; }
+  #merge-bar span { color: var(--faint); font-size: 13px; }
+  #merge-btn {
+    padding: 8px 14px; background: var(--red-soft); color: var(--text);
+    border: 1px solid var(--red); border-radius: 6px; font-family: var(--mono);
+    font-size: 13px; letter-spacing: .5px; cursor: pointer;
+  }
+  #merge-btn:disabled { opacity: .4; cursor: default; }
+</style>
+</head>
+<body>
+<div id="ops">
+  <header>
+    <img class="brand-img" src="/static/brand/qdrant-brandmark-white.svg" alt="Qdrant" style="height:22px">
+    <h1>FLEET <b>OPS</b></h1>
+  </header>
+  <p class="ops-warn"><b>Direct edits to Qdrant Cloud.</b> Delete, rename, and merge act on the shared fleet for every unit. Run while units are quiet.</p>
+  <input id="ops-filter" placeholder="filter by label or unit…" autocomplete="off">
+  <div class="section-head" id="ops-count"></div>
+  <div id="ops-list"></div>
+  <div id="merge-bar">
+    <span id="merge-note"></span>
+    <button id="merge-btn" disabled>MERGE</button>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => (s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+let POINTS = [];
+const SEL = new Set();       // ids selected for merge
+let EXPANDED = null;         // id whose vectors are shown
+
+function relTime(t) {
+  if (!t) return "never seen";
+  const s = Date.now() / 1000 - t;
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+
+async function load() {
+  const r = await fetch("/fleet/points");
+  const j = await r.json();
+  if (j.error) { $("ops-list").innerHTML = `<p class="ops-empty">${esc(j.error)}</p>`; return; }
+  POINTS = j.points.sort((a, b) =>
+    (a.label || "~").localeCompare(b.label || "~") || (a.device || "").localeCompare(b.device || ""));
+  for (const id of [...SEL]) if (!POINTS.some((p) => p.id === id)) SEL.delete(id);
+  render();
+}
+
+function render() {
+  const q = $("ops-filter").value.trim().toLowerCase();
+  const items = POINTS.filter((o) =>
+    !q || (o.label || "unnamed").toLowerCase().includes(q) || (o.device || "").toLowerCase().includes(q));
+  $("ops-count").textContent = `${items.length} fleet point${items.length === 1 ? "" : "s"}${q ? " matching" : ""}`;
+  if (!items.length) { $("ops-list").innerHTML = `<p class="ops-empty">no fleet points${q ? " match" : " yet"}</p>`; return; }
+  $("ops-list").innerHTML = items.map(rowHTML).join("");
+  wire();
+  updateMergeBar();
+}
+
+function rowHTML(o) {
+  const badge = o.kind === "ignored"
+    ? `<span class="badge ignored">ignored</span>`
+    : `<span class="badge fleet">fleet</span>`;
+  const n = o.views.length;
+  return `
+    <div class="inv-item" data-id="${esc(o.id)}" title="last seen ${esc(relTime(o.last_seen))} · ${esc(o.last_seen_device || o.device || "fleet")}">
+      <input type="checkbox" class="inv-check" data-id="${esc(o.id)}" ${SEL.has(o.id) ? "checked" : ""}>
+      <img class="inv-thumb" src="${o.thumb ? "data:image/jpeg;base64," + o.thumb : ""}" alt="">
+      <div class="inv-main">
+        <div class="inv-label">${esc(o.label || "(unnamed)")} ${badge}</div>
+        <div class="inv-meta">${n} vector${n === 1 ? "" : "s"} · ${esc(o.device || "?")} · seen ${esc(relTime(o.last_seen))}</div>
+      </div>
+      <div class="inv-actions">
+        <button class="mini-btn" data-act="rename" data-id="${esc(o.id)}" title="rename on the fleet">✎</button>
+        <button class="mini-btn" data-act="delete" data-id="${esc(o.id)}" title="delete from the fleet">✕</button>
+      </div>
+      <span class="cat-caret" title="show the individual vectors">${EXPANDED === o.id ? "▾" : "▸"}</span>
+    </div>
+    ${EXPANDED === o.id ? viewsHTML(o) : ""}`;
+}
+
+function viewsHTML(o) {
+  // per-view exemplars: thumbnails live on the unit that saw them, so views
+  // from other units render dimmed (only the object thumb rides the payload)
+  if (!o.views.length) return `<div class="views-row"><span class="views-legend">no per-view records</span></div>`;
+  // human-taught crops ride the fleet payload (v.thumb); otherwise try this unit's
+  // disk, then fall back to the object thumb so no cell is ever blank
+  const objThumb = o.thumb ? "data:image/jpeg;base64," + o.thumb : "";
+  const srcOf = (v) => v.thumb ? "data:image/jpeg;base64," + v.thumb : `/thumbs/${esc(v.view_id)}.jpg`;
+  return `<div class="views-row">
+    ${o.views.map((v) => `
+      <span class="view-cell ${v.human ? "human" : ""}" title="${v.human ? "taught/confirmed by a human" : "auto-captured while recognized"}">
+        <img src="${srcOf(v)}" alt="" onerror="this.src='${objThumb}';this.onerror=null;this.style.opacity=${objThumb ? 1 : 0.12}">
+        <button class="view-x" data-id="${esc(o.id)}" data-vid="${esc(v.view_id)}" title="delete this vector from the fleet">✕</button>
+      </span>`).join("")}
+    <span class="views-legend">green = taught by a human · taught crops synced · auto views show the object image</span>
+  </div>`;
+}
+
+function wire() {
+  $("ops-list").querySelectorAll(".inv-item").forEach((el) => {
+    el.onclick = (ev) => {
+      if (ev.target.closest(".mini-btn") || ev.target.closest(".inv-check")) return;
+      EXPANDED = EXPANDED === el.dataset.id ? null : el.dataset.id;
+      render();
+    };
+  });
+  $("ops-list").querySelectorAll(".inv-check").forEach((cb) => {
+    cb.onclick = (ev) => {
+      ev.stopPropagation();
+      cb.checked ? SEL.add(cb.dataset.id) : SEL.delete(cb.dataset.id);
+      updateMergeBar();
+    };
+  });
+  $("ops-list").querySelectorAll(".mini-btn[data-act]").forEach((btn) => {
+    btn.onclick = (ev) => { ev.stopPropagation(); act(btn.dataset.act, btn.dataset.id); };
+  });
+  $("ops-list").querySelectorAll(".view-x").forEach((btn) => {
+    btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      if (!confirm("delete this one vector from the fleet? (removes the whole object if it's the last)")) return;
+      await post("/fleet/prune", { id: btn.dataset.id, view_id: btn.dataset.vid });
+      load();
+    };
+  });
+}
+
+function updateMergeBar() {
+  const ids = [...SEL];
+  $("merge-bar").classList.toggle("show", ids.length > 0);
+  $("merge-btn").disabled = ids.length !== 2;
+  const label = (id) => (POINTS.find((p) => p.id === id) || {}).label || "(unnamed)";
+  $("merge-note").textContent = ids.length === 2
+    ? `fold "${label(ids[1])}" into "${label(ids[0])}" (first keeps its name)`
+    : `${ids.length} selected · pick exactly 2 to merge`;
+}
+
+async function act(kind, id) {
+  const label = (POINTS.find((p) => p.id === id) || {}).label || "(unnamed)";
+  if (kind === "rename") {
+    const next = prompt(`rename "${label}" on the fleet:`, label === "(unnamed)" ? "" : label);
+    if (!next || !next.trim()) return;
+    await post("/fleet/relabel", { id, label: next.trim() });
+  } else if (kind === "delete") {
+    if (!confirm(`delete "${label}" from the fleet for every unit?`)) return;
+    await post("/fleet/delete", { id });
+  }
+  load();
+}
+
+$("merge-btn").onclick = async () => {
+  const [keep, fold] = [...SEL];
+  if (!fold) return;
+  const lbl = (id) => (POINTS.find((p) => p.id === id) || {}).label || "(unnamed)";
+  if (!confirm(`merge "${lbl(fold)}" into "${lbl(keep)}" on the fleet?`)) return;
+  await post("/fleet/merge", { keep, fold });
+  SEL.clear();
+  load();
+};
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!j.ok) alert("fleet: " + (j.error || "failed"));
+}
+
+$("ops-filter").oninput = render;
+load();
+</script>
+</body>
+</html>

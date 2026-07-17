@@ -1093,7 +1093,11 @@ function renderInventory() {
   const match = (o) => !q
     || (o.label || "ignored look").toLowerCase().includes(q)
     || (o.device || "").toLowerCase().includes(q);
-  const objects = S.inventory.filter((o) => !o.ignored && match(o));
+  // yours first, fleet-only memories after (grouping anchors a category at its
+  // first member, so a local instance floats its category up)
+  const objects = S.inventory
+    .filter((o) => !o.ignored && match(o))
+    .sort((a, b) => (b.local === true) - (a.local === true));
   const ignored = S.inventory.filter((o) => o.ignored && match(o));
   // category boxes: same-name instances collapse to one row; a filter query
   // opens whatever it matched (typing "hat" should show the hats, not a box)
@@ -1190,16 +1194,20 @@ function catKey(o) {
 }
 
 function invRow(o, cls = "") {
+  // fleet status shows in the actions slot (where local rows keep their buttons),
+  // so the label carries a badge only for local/pushed state
   const badge = o.ignored
     ? `<span class="badge ignored">ignored</span>`
-    : `<span class="badge ${o.local ? "" : "fleet"}">${o.local ? (o.pushed ? "pushed" : "local") : "fleet"}</span>`;
+    : o.local
+      ? `<span class="badge">${o.pushed ? "pushed" : "local"}</span>`
+      : "";
   const actions = o.ignored
     ? `<button class="mini-btn" data-act="unignore" title="track this again">unignore</button>`
     : o.local
       ? `<button class="mini-btn" data-act="rename" title="rename">✎</button>
          <button class="mini-btn" data-act="ignore" title="blocklist">⊘</button>
          <button class="mini-btn" data-act="forget" title="forget">✕</button>`
-      : "";
+      : `<span class="badge fleet" title="lives on the fleet — manage in Fleet Ops">fleet</span>`;
   // the unit is the location: hovering answers "where and when was this last seen?"
   const where = o.local ? "this unit" : (o.device || "fleet");
   const hover = o.last_seen
@@ -1224,15 +1232,22 @@ function viewsRow(o) {
   // and per-view thumbnails exist only on the unit that saw them (only the
   // object thumb rides a fleet payload) — missing files render dimmed
   const editable = o.local || o.ignored;
+  // local views load their crop from disk; fleet views carry the human-taught
+  // crop in the payload (v.thumb), and anything without one falls back to the
+  // object thumb rather than an empty cell
+  const objThumb = o.thumb ? "data:image/jpeg;base64," + o.thumb : "";
+  const srcOf = (v) => v.thumb
+    ? "data:image/jpeg;base64," + v.thumb
+    : o.local ? `/thumbs/${v.view_id}.jpg` : objThumb;
   return `<div class="views-row">
     ${o.views.map((v) => `
       <span class="view-cell ${v.human ? "human" : ""}" title="${v.human ? "taught/confirmed by a human" : "auto-captured while recognized"}">
-        <img src="/thumbs/${v.view_id}.jpg" alt="" onerror="this.style.opacity=.12">
+        <img src="${srcOf(v)}" alt="" onerror="this.src='${objThumb}';this.onerror=null;this.style.opacity=${objThumb ? 1 : 0.12}">
         ${editable ? `<button class="view-x" data-oid="${o.object_id}" data-vid="${v.view_id}" title="prune this vector">✕</button>` : ""}
       </span>`).join("")}
     <span class="views-legend">${editable
       ? "green = taught by you · grey = auto-captured"
-      : "fleet memory · pictures live on the unit that saw them · confirm it live to edit"}</span>
+      : "fleet memory · taught crops synced · auto views show the object image · confirm it live to edit"}</span>
   </div>`;
 }
 

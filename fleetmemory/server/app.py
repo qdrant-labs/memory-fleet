@@ -204,6 +204,93 @@ def create_app(settings: Settings) -> FastAPI:
         except (OSError, TimeoutError, ValueError):  # Ollama absent/slow/bad reply
             return {"sentence": ""}
 
+    # ---------- fleet ops (hidden operator console, no link from the app) ----------
+    # Edits go straight to Qdrant Cloud via FleetClient, not the local core:
+    # fleet admin is Cloud CRUD, unrelated to the single-threaded live heart.
+    # The local mirror reconciles on the next pull (same benign zombie as sleep).
+    # ponytail: localhost-only bind is the security boundary; no per-endpoint auth.
+    def _fleet_client():
+        return app.state.sync.client if app.state.sync else None
+
+    @app.get("/fleet-ops")
+    async def fleet_ops():
+        return FileResponse(STATIC_DIR / "fleet.html")
+
+    @app.get("/fleet/points")
+    async def fleet_points():
+        client = _fleet_client()
+        if client is None:
+            return {"points": [], "error": "fleet disabled"}
+
+        def work():
+            items = []
+            for r in client.scroll_all():
+                pl = r.payload or {}
+                if pl.get("synthetic"):
+                    continue
+                items.append(
+                    {
+                        "id": str(r.id),
+                        "label": pl.get("label", ""),
+                        "thumb": pl.get("thumb", ""),
+                        "device": pl.get("device", ""),
+                        "views": pl.get("views") or [],
+                        "last_seen": pl.get("t_seen", 0.0),
+                        "last_seen_device": pl.get("last_seen_device", ""),
+                        "kind": pl.get("kind", "object"),
+                    }
+                )
+            return items
+
+        return {"points": await asyncio.to_thread(work)}
+
+    @app.post("/fleet/delete")
+    async def fleet_delete(request: Request):
+        client = _fleet_client()
+        if client is None:
+            return {"ok": False, "error": "fleet disabled"}
+        pid = str((await request.json()).get("id", ""))
+        if not pid:
+            return {"ok": False, "error": "no id"}
+        await asyncio.to_thread(client.delete, pid)
+        return {"ok": True}
+
+    @app.post("/fleet/relabel")
+    async def fleet_relabel(request: Request):
+        client = _fleet_client()
+        if client is None:
+            return {"ok": False, "error": "fleet disabled"}
+        a = await request.json()
+        pid, label = str(a.get("id", "")), str(a.get("label", "")).strip()
+        if not pid or not label:
+            return {"ok": False, "error": "id and label required"}
+        ok = await asyncio.to_thread(client.relabel, pid, label)
+        return {"ok": ok}
+
+    @app.post("/fleet/prune")
+    async def fleet_prune(request: Request):
+        client = _fleet_client()
+        if client is None:
+            return {"ok": False, "error": "fleet disabled"}
+        a = await request.json()
+        pid, vid = str(a.get("id", "")), str(a.get("view_id", ""))
+        if not pid or not vid:
+            return {"ok": False, "error": "id and view_id required"}
+        ok = await asyncio.to_thread(client.prune_view, pid, vid)
+        return {"ok": ok}
+
+    @app.post("/fleet/merge")
+    async def fleet_merge(request: Request):
+        client = _fleet_client()
+        if client is None:
+            return {"ok": False, "error": "fleet disabled"}
+        a = await request.json()
+        keep, fold = str(a.get("keep", "")), str(a.get("fold", ""))
+        if not keep or not fold or keep == fold:
+            return {"ok": False, "error": "pick two distinct points"}
+        ok = await asyncio.to_thread(client.merge, keep, fold)
+        return {"ok": ok, "error": None if ok else "merge failed (different kinds?)"}
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.websocket("/ws")

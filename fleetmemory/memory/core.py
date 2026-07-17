@@ -1048,7 +1048,7 @@ class Core:
             payload, rows = got
             if payload.get("kind") != "object" or payload.get("synthetic"):
                 continue  # blocklist entries and stunt synthetics never reach the fleet
-            views = list(payload.get("views") or [])
+            views = self._views_with_thumbs(payload.get("views") or [])
             out.append(
                 {
                     "id": oid,
@@ -1066,6 +1066,18 @@ class Core:
                 }
             )
         m.reply.put(out)
+
+    def _views_with_thumbs(self, views: list) -> list:
+        """Embed human-taught view crops as base64 so the fleet carries them to
+        every unit (their JPGs live only on the unit that saw them). Auto-captured
+        views stay image-less and fall back to the object thumb at render."""
+        out = []
+        for v in views:
+            p = self.thumbs_dir / f"{v.get('view_id')}.jpg"
+            if v.get("human") and p.is_file():
+                v = {**v, "thumb": base64.b64encode(p.read_bytes()).decode()}
+            out.append(v)
+        return out
 
     def _on_markpushed(self, m: MarkPushed):
         for it in m.items:
