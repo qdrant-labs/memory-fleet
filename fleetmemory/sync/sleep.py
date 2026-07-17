@@ -1,8 +1,8 @@
 """The fleet sleeps: consolidate duplicate instances, decay stale memories.
 
 Consolidation folds same-label fleet points that plausibly ARE the same
-physical thing (cross max-sim >= S_SUGGEST, the gate teach and push folds
-use) into the oldest sibling. Decay scores every point with a Qdrant
+physical thing (cross max-sim >= S_FLEET_FOLD, the same instance-confidence
+gate the push label-fold uses) into the oldest sibling. Decay scores every point with a Qdrant
 exp_decay formula on t_seen and moves everything below the floor into
 <collection>-archive — the hot fleet stays small, so every unit's mirror
 (a snapshot of it) stays small too. Archived memories are cold, not gone.
@@ -21,7 +21,7 @@ import numpy as np
 from qdrant_client import models
 
 from fleetmemory.memory.core import NEG_CAP, fold_rows
-from fleetmemory.memory.matcher import S_SUGGEST
+from fleetmemory.memory.matcher import S_FLEET_FOLD
 from fleetmemory.sync.client import FleetClient
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def consolidate(client: FleetClient, dry_run: bool = False) -> int:
                 continue
             ate = False
             for j in range(i + 1, len(recs)):
-                if j in gone or _maxsim(mats[i], mats[j]) < S_SUGGEST:
+                if j in gone or _maxsim(mats[i], mats[j]) < S_FLEET_FOLD:
                     continue
                 kp, fp = keep.payload or {}, recs[j].payload or {}
                 rows, views = fold_rows(

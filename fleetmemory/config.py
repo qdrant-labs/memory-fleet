@@ -42,6 +42,7 @@ class Settings:
     port: int
     data_dir: Path
     detector_model: str | None
+    camera_index: int
 
     @property
     def fleet_enabled(self) -> bool:
@@ -58,6 +59,10 @@ def load_settings(
         port = int(merged.get("FM_PORT") or DEFAULT_PORT)
     except ValueError:
         port = DEFAULT_PORT
+    try:
+        camera_index = int(merged.get("FM_CAMERA") or 0)
+    except ValueError:
+        camera_index = 0
     return Settings(
         qdrant_url=merged.get("QDRANT_URL") or None,
         qdrant_api_key=merged.get("QDRANT_API_KEY") or None,
@@ -66,4 +71,5 @@ def load_settings(
         port=port,
         data_dir=Path(merged.get("FM_DATA_DIR") or "edge-data"),
         detector_model=merged.get("FM_MODEL") or None,
+        camera_index=camera_index,
     )

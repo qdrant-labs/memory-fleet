@@ -15,6 +15,12 @@ from .store import Candidate
 S_SAME = 0.80
 S_SUGGEST = 0.55
 S_IGNORE = 0.90
+# Gate for an IRREVERSIBLE cross-instance merge on the fleet (push label-fold
+# and sleep consolidation). It sits at "same instance" confidence, NOT the
+# suggest-pill threshold: two co-workers' distinct same-name objects (mug, keys)
+# routinely reach 0.55, and merging them yields a chimera point. Local re-teach
+# folds still use the tunable s_suggest — that's one person re-showing one thing.
+S_FLEET_FOLD = S_SAME
 HUMAN_BONUS = 0.02  # a human-vouched view is worth a nudge at the margin
 # Soft suppression: a look this close to an ignored entry is hidden too —
 # UNLESS memory has a better idea (a taught object outranking it wins).

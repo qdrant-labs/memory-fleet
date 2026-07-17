@@ -855,6 +855,9 @@ class Core:
                 device=self.device_name,
                 event=self.event_tag,
                 thumb=base64.b64encode(ts.last_thumb).decode() if ts.last_thumb else "",
+                # seed the sighting like a live teach: recall right after naming
+                # an archived card still knows when and which room it was last seen
+                base_payload={"t_seen": ts.last_seen, "last_seen_device": self.device_name},
             )
             self._emit({"type": "object_created", "object_id": object_id, "label": label})
         self._emit({"type": "unknown_removed", "tid": m.tid, "epoch": m.epoch})

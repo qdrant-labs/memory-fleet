@@ -99,7 +99,7 @@ def create_app(settings: Settings) -> FastAPI:
         event_tag=settings.event_tag,
         on_event=on_core_event,
     )
-    source = CameraSource(0)
+    source = CameraSource(settings.camera_index)
     pipeline = Pipeline(core, source, hub.broadcast, model=settings.detector_model)
 
     sync = None
