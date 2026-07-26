@@ -93,7 +93,9 @@ make run
 ```
 
 Open `http://127.0.0.1:8765`. The first run downloads about 500 MB of model
-weights.
+weights. Every model loads from that local cache afterwards, so run once with a
+connection, then turn Wi-Fi off and restart to confirm the offline case before a
+demo.
 
 Fleet sync is optional. Without a `.env`, the app runs fully local. To join a
 fleet:
@@ -163,5 +165,5 @@ fleetmemory/
   sync/              # fleet client, sync manager, fleet-sleep job
   server/            # FastAPI app, WebSocket, capture/detect pipeline
 static/              # vanilla-JS UI + brand assets
-scripts/             # preload_scale.py, demo_check.py
+scripts/             # preload_scale.py
 ```

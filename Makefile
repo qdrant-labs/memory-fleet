@@ -1,6 +1,6 @@
 # Fleet Memory — build/run targets
 
-.PHONY: setup lint run run-b reset demo-check demo-restore demo-save demo-scale fleet-sleep
+.PHONY: setup lint run run-b reset demo-restore demo-save demo-scale fleet-sleep
 
 setup:
 	uv sync --all-extras
@@ -24,10 +24,6 @@ fleet-sleep:
 	uv run python -m fleetmemory.sync.sleep
 
 # --- demo rituals ---
-
-# offline preflight: weights, models, and caches present without network
-demo-check:
-	uv run python scripts/demo_check.py
 
 # build the 300k-vector scale shard (press S in the UI to attach it)
 demo-scale:
