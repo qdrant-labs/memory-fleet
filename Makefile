@@ -1,6 +1,6 @@
 # Fleet Memory — build/run targets
 
-.PHONY: setup lint run run-b reset demo-restore demo-save demo-scale fleet-sleep
+.PHONY: setup lint run run-b reset demo-scale fleet-sleep
 
 setup:
 	uv sync --all-extras
@@ -28,12 +28,3 @@ fleet-sleep:
 # build the 300k-vector scale shard (press S in the UI to attach it)
 demo-scale:
 	uv run python scripts/preload_scale.py
-
-# golden "yesterday's memory" state: teach on stage conditions once, then save
-demo-save:
-	rm -rf demo-golden && cp -R edge-data demo-golden
-	@echo "golden state saved (commit demo-golden/ to version it)"
-
-demo-restore:
-	rm -rf edge-data && cp -R demo-golden edge-data
-	@echo "stage state restored from demo-golden/"

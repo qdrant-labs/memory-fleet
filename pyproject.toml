@@ -1,7 +1,7 @@
 [project]
 name = "fleetmemory"
 version = "0.1.0"
-description = "Fleet Memory — shared object memory on Qdrant Edge (demo)"
+description = "Fleet Memory — shared object memory on Qdrant Edge"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "qdrant-edge-py==0.7.2",   # beta, API drifts between minors — pinned exactly

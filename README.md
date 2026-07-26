@@ -4,10 +4,9 @@ Shared object memory on Qdrant Edge: show one device an object once, and every
 device in the fleet can recognize it.
 
 **No LLM is used at runtime.** Recognition is local vector search over shared
-object memory; teaching is just adding new vectors, labels, thumbnails, and
-metadata.
+object memory; teaching adds new vectors, labels, thumbnails, and metadata.
 
-![Fleet Memory mission control: live feed with recognized objects, memory map, and fleet search](docs/screenshot-ui.png)
+![Fleet Memory mission control: live feed with recognized objects, memory map, and fleet search](docs/screenshot-ui.jpg)
 
 ## What It Does
 
@@ -32,7 +31,7 @@ build of Qdrant:
   shards on disk.
 - **Offline first:** a device can keep teaching and recognizing with no fleet
   connection.
-- **Native sync:** local shards synchronize with Qdrant Cloud through
+- **Cloud sync:** local shards synchronize with Qdrant Cloud through
   [Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/).
 
 ## How It Works
@@ -114,9 +113,6 @@ EVENT_TAG=demo        # tag stamped on pushed objects
 FM_MODEL=...          # optional detector size
 ```
 
-On fanless or slower Macs, set `FM_MODEL=yoloe-11m-seg-pf.pt` or
-`FM_MODEL=yoloe-11s-seg-pf.pt` to reduce heat. Stored memory is unchanged.
-
 Useful demo targets:
 
 ```bash
@@ -148,6 +144,13 @@ change stored memory.
 - Retail and warehouse devices learning shared inventory from any unit.
 - Wearables and smart cameras that recognize objects a peer taught them.
 - Edge fleets where local learning, privacy, and shared memory all matter.
+
+The sync pattern is portable to any of these: each device reads and writes a
+local Edge shard, pushes curated points to the shared collection with the
+standard Qdrant client, and pulls the collection back as a snapshot through
+[Edge synchronization](https://qdrant.tech/documentation/edge/edge-synchronization-guide/).
+`fleetmemory/sync/` is the whole implementation. Adapt the push gate and
+payload to your own domain.
 
 ## Next Step
 

@@ -64,14 +64,13 @@ const handlers = {
     send({ cmd: "map" });
   },
   frame(m) {
-    // video-only frames at ~24 fps (boxes arrive separately at ~8 Hz and the
-    // rAF loop interpolates); a frame may still carry boxes, applied if present
+    // video-only frames at ~24 fps; boxes arrive separately at ~8 Hz and the
+    // rAF loop interpolates
     const seq = ++S.frameSeq;
     const img = new Image();
     img.onload = () => { if (seq >= S.shownSeq) { S.shownSeq = seq; S.frame = img; S.dirty = true; } };
     img.src = "data:image/jpeg;base64," + m.jpg;
     vfpsTick();
-    if (m.boxes !== undefined) applyBoxes(m);
   },
   boxes(m) { applyBoxes(m); },
   perf(m) {
@@ -1342,15 +1341,15 @@ function setFleet(on) {
   } else if (on) {
     pill.className = "pill on";
     $("fleet-label").textContent = "FLEET LINKED";
-    pill.dataset.tip = "Connected to the shared fleet memory (Qdrant Cloud). Objects you " +
-      "teach sync to the fleet automatically, becoming recognizable to every unit; " +
-      "new fleet memories arrive here the same way (~30 s).";
+    pill.dataset.tip = "Connected to the shared fleet memory (Qdrant Cloud). Teachings stay " +
+      "on this unit until you push them from the memory drawer; fleet memories from " +
+      "other units arrive here automatically (~30 s).";
   } else {
     pill.className = "pill off";
     $("fleet-label").textContent = "FLEET OFFLINE";
     pill.dataset.tip = "The shared fleet memory (Qdrant Cloud) isn't reachable right now. " +
-      "Everything still works on-device; your teachings stay local and sync " +
-      "automatically when the fleet comes back.";
+      "Everything still works on-device; your teachings stay local, ready to " +
+      "push when the fleet comes back.";
   }
   $("btn-pull").classList.toggle("hidden", !on);
   if (S.drawerMode === "inventory") updateCuration();

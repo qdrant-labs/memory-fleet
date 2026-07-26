@@ -30,21 +30,6 @@ HALF_LIFE_DAYS = 30.0
 FLOOR = 0.05  # exp_decay score below this = archived (~130 days unseen at 30d half-life)
 
 
-def _scroll_all(client: FleetClient, with_vectors: bool = True) -> list:
-    recs, offset = [], None
-    while True:
-        page, offset = client.client.scroll(
-            client.collection,
-            limit=256,
-            offset=offset,
-            with_payload=True,
-            with_vectors=with_vectors,
-        )
-        recs += page
-        if offset is None:
-            return recs
-
-
 def _maxsim(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.max(a @ b.T))
 
@@ -57,7 +42,7 @@ def _born(rec) -> float:
 def consolidate(client: FleetClient, dry_run: bool = False) -> int:
     """Merge same-label duplicates into the oldest sibling. Returns points folded."""
     groups: dict[str, list] = {}
-    for rec in _scroll_all(client):
+    for rec in client.scroll_all(with_vectors=True):
         if (rec.vector or {}).get("exemplars"):
             groups.setdefault((rec.payload or {}).get("label_key", ""), []).append(rec)
 
@@ -135,7 +120,7 @@ def decay(
         return 0
 
     # backfill: pre-heartbeat points decay from their push time, not from zero
-    for rec in _scroll_all(client, with_vectors=False):
+    for rec in client.scroll_all():
         pl = rec.payload or {}
         if not pl.get("t_seen") and not dry_run:
             client.client.set_payload(

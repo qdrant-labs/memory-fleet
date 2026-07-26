@@ -10,7 +10,7 @@ __pycache__/
 *.pt
 *.onnx
 
-# runtime data (demo-golden/ stays versioned — it is the staged cold-open state)
+# runtime data
 edge-data*/
 *.snapshot
 

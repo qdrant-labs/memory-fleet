@@ -1,8 +1,7 @@
-"""Sync lifecycle: every ~30 s tick pulls, then auto-pushes any dirty
-confirmed objects in one batch (curation can still push explicitly). Offline
-ticks skip both — dirty objects wait and ride the first tick after reconnect.
-Downloads happen on this worker; shard mutations happen as queued core
-messages. Sync failures degrade to "fleet offline", never crash.
+"""Sync lifecycle: pull at boot and every ~30 s tick; push only on an explicit
+user request from curation (id list, no sweep-all path). Downloads happen on
+this worker; shard mutations happen as queued core messages. Sync failures
+degrade to "fleet offline", never crash.
 """
 
 import logging
